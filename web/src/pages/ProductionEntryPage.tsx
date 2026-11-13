@@ -25,11 +25,13 @@ import {
   fromRow,
   isoToStamp,
   newEntryState,
+  nowStamp,
   sectionOf,
   sideFamily,
   spanComplete,
   stampMs,
   stepTimes,
+  time12,
   toPayload,
   wastageTotal,
 } from '../lib/production'
@@ -127,6 +129,21 @@ function EntryEditor({ entryId }: { entryId: string | null }) {
   const [conflict, setConflict] = useState<DraftInfo | null>(null)
   const [stale, setStale] = useState('')
   const [dirty, setDirty] = useState(false)
+  const dirtyRef = useRef(false)
+  const touch = useCallback(() => {
+    dirtyRef.current = true
+    setDirty(true)
+  }, [])
+  const markClean = () => {
+    dirtyRef.current = false
+    setDirty(false)
+  }
+  // Automatic draft saving.
+  const [autoNote, setAutoNote] = useState<{ kind: 'ok' | 'busy' | 'error'; text: string } | null>(null)
+  const inFlight = useRef<Promise<unknown> | null>(null)
+  // Open drafts on other machines: one entry per machine at a time.
+  const [machineDrafts, setMachineDrafts] = useState<(DraftInfo & { machine_id: string })[]>([])
+  const [machineBlock, setMachineBlock] = useState<(DraftInfo & { machine_id: string }) | null>(null)
 
   const [machines, setMachines] = useState<Machine[]>([])
   const [myMachines, setMyMachines] = useState<string[] | null>(null)
@@ -159,6 +176,14 @@ function EntryEditor({ entryId }: { entryId: string | null }) {
       .order('code')
       .then(({ data }) => setMachines((data ?? []) as Machine[]))
     supabase.rpc('production_order_options').then(({ data }) => setOrders((data ?? []) as OrderOption[]))
+  }, [])
+
+  useEffect(() => {
+    supabase
+      .from('production_entries')
+      .select('id, entry_no, machine_id, order_no, job_name, production_date, shift, updated_at')
+      .eq('status', 'draft')
+      .then(({ data }) => setMachineDrafts((data ?? []) as (DraftInfo & { machine_id: string })[]))
   }, [])
 
   useEffect(() => {
@@ -283,9 +308,9 @@ function EntryEditor({ entryId }: { entryId: string | null }) {
   const update = useCallback(
     (patch: Partial<EntryState>) => {
       setSt((s) => withAuto({ ...s, ...patch }))
-      setDirty(true)
+      touch()
     },
-    [withAuto],
+    [withAuto, touch],
   )
 
   const machineChoices = useMemo(
@@ -296,7 +321,15 @@ function EntryEditor({ entryId }: { entryId: string | null }) {
     [machines, myMachines, st.machine_id],
   )
 
+  const otherDraftOn = (machineId: string) => machineDrafts.find((d) => d.machine_id === machineId && d.id !== meta.id)
+
   function chooseMachine(machineId: string) {
+    // One entry per machine at a time: a machine with an open draft is blocked.
+    const open = machineId ? otherDraftOn(machineId) : undefined
+    if (open) {
+      setMachineBlock(open)
+      return
+    }
     const machine = machines.find((m) => m.id === machineId)
     update({
       machine_id: machineId,
@@ -338,7 +371,7 @@ function EntryEditor({ entryId }: { entryId: string | null }) {
 
   function chooseSide(side: string) {
     setSt((cur) => withAuto(sideColours({ ...cur, print_side: side }, statusRef.current, false)))
-    setDirty(true)
+    touch()
   }
 
   // ---- Start times ----------------------------------------------------------------
@@ -352,12 +385,12 @@ function EntryEditor({ entryId }: { entryId: string | null }) {
       else if (startChanged && !manual.includes(key)) manual = [...manual, key]
       return withAuto({ ...cur, [key]: span, manual_starts: manual })
     })
-    setDirty(true)
+    touch()
   }
 
   function resetStart(key: StepKey) {
     setSt((cur) => withAuto({ ...cur, manual_starts: cur.manual_starts.filter((k) => k !== key) }))
-    setDirty(true)
+    touch()
   }
 
   const readyStamp = timeline?.ready_at && meta.status !== 'submitted' ? isoToStamp(timeline.ready_at) : null
@@ -407,15 +440,23 @@ function EntryEditor({ entryId }: { entryId: string | null }) {
   const sideClosed = Boolean(st.print_side && status?.closed_sides?.includes(st.print_side))
 
   // ---- Saving --------------------------------------------------------------------------
-  async function callSave(submit: boolean, close: boolean): Promise<SaveResult | null> {
-    const { entry, wastage, downtime } = toPayload(st)
+  // Latest values for saves that run outside a render (automatic saving).
+  const stRef = useRef(st)
+  const metaRef = useRef(meta)
+  useEffect(() => {
+    stRef.current = st
+    metaRef.current = meta
+  })
+
+  async function callSave(state: EntryState, submit: boolean, close: boolean, quiet = false): Promise<SaveResult | null> {
+    const { entry, wastage, downtime } = toPayload(state)
     const args = {
-      p_id: meta.id,
+      p_id: metaRef.current.id,
       p_save_id: crypto.randomUUID(),
       p_submit: submit,
       p_entry: entry,
       p_wastage: wastage,
-      p_expected_updated_at: meta.updatedAt,
+      p_expected_updated_at: metaRef.current.updatedAt,
       p_close_side: close,
       p_downtime: downtime,
     }
@@ -425,31 +466,96 @@ function EntryEditor({ entryId }: { entryId: string | null }) {
       if (!error) return data as SaveResult
       const network = /fetch|network/i.test(error.message ?? '')
       if (!network || attempt >= 3) {
-        notify('error', friendlyError(error, 'entry'))
+        if (quiet) setAutoNote({ kind: 'error', text: `Draft not saved: ${friendlyError(error, 'entry')}` })
+        else notify('error', friendlyError(error, 'entry'))
         return null
       }
       await new Promise((r) => setTimeout(r, 800 * attempt))
     }
   }
 
+  // After a draft is saved: remember its number/version, and give the page the
+  // draft's own address (without reloading the form).
+  function draftSaved(result: { id: string; entry_no: number; updated_at: string }) {
+    const next = { ...metaRef.current, entryNo: result.entry_no, status: 'draft' as const, updatedAt: result.updated_at }
+    metaRef.current = next
+    setMeta(next)
+    const path = `/production/entry/${result.id}`
+    if (window.location.pathname !== path) window.history.replaceState(window.history.state, '', path)
+  }
+
+  // Saves the work as a draft without asking: when changing section, leaving the
+  // page or switching browser tab, and after a pause in typing.
+  async function autosave() {
+    const m = metaRef.current
+    const state = stRef.current
+    if (!dirtyRef.current || m.status === 'submitted' || readOnly || !state.machine_id || otherDraftOn(state.machine_id)) return
+    if (inFlight.current) return
+    setAutoNote({ kind: 'busy', text: 'Saving draft…' })
+    const job = callSave(state, false, false, true)
+    inFlight.current = job
+    const result = await job
+    inFlight.current = null
+    if (!result) return
+    if (result.ok) {
+      if (stRef.current === state) markClean()
+      draftSaved(result)
+      setAutoNote({ kind: 'ok', text: `Draft ${entryLabel(result.entry_no)} saved automatically at ${time12(nowStamp().time)}` })
+    } else if (result.code === 'DRAFT_EXISTS') {
+      setAutoNote(null)
+      setConflict(result.draft)
+    } else if (result.code === 'STALE') {
+      setAutoNote(null)
+      setStale(result.message)
+    } else {
+      setAutoNote({ kind: 'error', text: `Draft not saved yet: ${result.errors.map((e) => e.message).join(' ')}` })
+    }
+  }
+  const autosaveRef = useRef(autosave)
+  useEffect(() => {
+    autosaveRef.current = autosave
+  })
+
+  // After a pause in typing, and when the browser tab is hidden or the page is left.
+  useEffect(() => {
+    if (!dirty) return
+    const t = setTimeout(() => autosaveRef.current(), 15000)
+    return () => clearTimeout(t)
+  }, [st, dirty])
+  useEffect(() => {
+    const onHide = () => document.visibilityState === 'hidden' && autosaveRef.current()
+    document.addEventListener('visibilitychange', onHide)
+    return () => {
+      document.removeEventListener('visibilitychange', onHide)
+      autosaveRef.current() // leaving the page inside the app
+    }
+  }, [])
+
+  function goTab(i: number) {
+    setTab(i)
+    autosave()
+  }
+
   async function save(submit: boolean, close = false) {
     if (lookupBusy || saving) return
     setSaving(true)
     setStale('')
-    const result = await callSave(submit, close)
+    if (inFlight.current) await inFlight.current
+    const state = stRef.current
+    const result = await callSave(state, submit, close)
     setSaving(false)
     setConfirming(false)
     if (!result) return
     if (result.ok) {
       setErrors([])
-      setDirty(false)
+      if (stRef.current === state || result.status === 'submitted') markClean()
       if (result.status === 'submitted') {
         notify('success', `Entry ${entryLabel(result.entry_no)} saved.`)
         navigate('/production/entry')
       } else {
         notify('success', `Draft ${entryLabel(result.entry_no)} saved.`)
-        if (meta.status === 'new') navigate(`/production/entry/${result.id}`, { replace: true })
-        else setMeta((m) => ({ ...m, entryNo: result.entry_no, status: result.status, updatedAt: result.updated_at }))
+        draftSaved(result)
+        setAutoNote(null)
       }
       return
     }
@@ -514,6 +620,7 @@ function EntryEditor({ entryId }: { entryId: string | null }) {
             <option key={m.id} value={m.id}>
               {m.code}
               {m.name !== m.code ? ` · ${m.name}` : ''}
+              {otherDraftOn(m.id) ? ' (draft open)' : ''}
             </option>
           ))}
         </select>
@@ -1023,7 +1130,7 @@ function EntryEditor({ entryId }: { entryId: string | null }) {
             role="tab"
             aria-selected={tab === i}
             className={tab === i ? 'active' : ''}
-            onClick={() => setTab(i)}
+            onClick={() => goTab(i)}
           >
             <span className="tab-no">{i + 1}</span> {label}
             {sectionErrorCount[i] > 0 && <span className="tab-errors">{sectionErrorCount[i]}</span>}
@@ -1040,13 +1147,18 @@ function EntryEditor({ entryId }: { entryId: string | null }) {
 
       <div className="entry-footer">
         <div className="actions">
-          <button type="button" disabled={tab === 0} onClick={() => setTab(tab - 1)} aria-label="Previous section">
+          <button type="button" disabled={tab === 0} onClick={() => goTab(tab - 1)} aria-label="Previous section">
             <ArrowLeft size={16} /> <span className="hide-sm">Previous</span>
           </button>
-          <button type="button" disabled={tab === SECTIONS.length - 1} onClick={() => setTab(tab + 1)} aria-label="Next section">
+          <button type="button" disabled={tab === SECTIONS.length - 1} onClick={() => goTab(tab + 1)} aria-label="Next section">
             <span className="hide-sm">Next</span> <ArrowRight size={16} />
           </button>
         </div>
+        {autoNote && (
+          <span className={`auto-save ${autoNote.kind}`} role="status">
+            {autoNote.text}
+          </span>
+        )}
         {!readOnly && (
           <div className="actions">
             {meta.status !== 'submitted' && (
@@ -1118,6 +1230,47 @@ function EntryEditor({ entryId }: { entryId: string | null }) {
         </Modal>
       )}
 
+      {machineBlock && (
+        <Modal
+          title="This machine already has an open entry"
+          onClose={() => setMachineBlock(null)}
+          width={480}
+          footer={
+            <>
+              <button type="button" onClick={() => setMachineBlock(null)}>
+                Choose another machine
+              </button>
+              <button
+                type="button"
+                className="primary"
+                onClick={() => {
+                  const id = machineBlock.id
+                  setMachineBlock(null)
+                  markClean()
+                  navigate(`/production/entry/${id}`)
+                }}
+              >
+                Open that draft
+              </button>
+            </>
+          }
+        >
+          <p>
+            <b>{machines.find((m) => m.id === machineBlock.machine_id)?.code}</b> has draft <b>{entryLabel(machineBlock.entry_no)}</b>
+            {machineBlock.order_no ? ` · order ${machineBlock.order_no}` : ''}
+            {machineBlock.job_name ? ` · ${machineBlock.job_name}` : ''}
+          </p>
+          <p className="muted">
+            {formatDate(machineBlock.production_date)}
+            {machineBlock.shift ? ` · Shift ${machineBlock.shift}` : ''} · last saved {formatMoment(machineBlock.updated_at)}
+          </p>
+          <p className="notice warn">
+            Only one entry per machine at a time. Finish (submit) or delete that draft before starting a new entry on this
+            machine.
+          </p>
+        </Modal>
+      )}
+
       {conflict && (
         <Modal
           title="This machine already has a draft"
@@ -1133,7 +1286,7 @@ function EntryEditor({ entryId }: { entryId: string | null }) {
                 className="primary"
                 onClick={() => {
                   setConflict(null)
-                  setDirty(false)
+                  markClean()
                   navigate(`/production/entry/${conflict.id}`)
                 }}
               >
@@ -1163,15 +1316,15 @@ const digits = (v: string) => v.replace(/[^0-9]/g, '')
 
 // The colours the units can use: the plan's slot for the chosen print side (planned
 // orders), or the colours typed for an unplanned order. Unit choices that are no
-// longer valid are cleared; when no unit is allocated, units are filled in order.
+// longer valid are cleared.
 function sideColours(st: EntryState, status: OrderStatus | null, orderChanged: boolean): EntryState {
   let colours: string[] | null = null
   if (status?.job) colours = status.job.sides.find((x) => x.print_side === st.print_side)?.colours ?? []
   else if (orderChanged) colours = status?.last_entry_job?.sides.find((x) => x.print_side === st.print_side)?.colours ?? []
   const list = colours ?? cleanColours(st.planned_colours).colours
   const keys = new Set(list.map((c) => c.toLowerCase()))
-  let units = st.unit_colours.map((u) => (u && keys.has(u.toLowerCase()) ? u : ''))
-  if (!units.some(Boolean) && list.length) units = Array.from({ length: UNIT_COUNT }, (_, i) => list[i] ?? '')
+  // Units are chosen by the operator; only choices that no longer fit are cleared.
+  const units = st.unit_colours.map((u) => (u && keys.has(u.toLowerCase()) ? u : ''))
   return {
     ...st,
     planned_colours: colours ? Array.from({ length: Math.max(7, colours.length) }, (_, i) => colours[i] ?? '') : st.planned_colours,

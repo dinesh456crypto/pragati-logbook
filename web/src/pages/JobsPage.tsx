@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { Eye, Pencil, Plus, Search, Trash2 } from 'lucide-react'
@@ -362,6 +362,8 @@ interface Slot {
 }
 
 let slotKey = 0
+const isBB = (side: string) => side === 'B/B F' || side === 'B/B B'
+
 const newSlot = (print_side = '', colours: string[] = []): Slot => ({
   key: ++slotKey,
   print_side,
@@ -383,10 +385,20 @@ function JobForm({ job, readOnly, canEdit, papers, onEdit, onClose, onSaved }: F
   const [paperId, setPaperId] = useState(job?.paper_type_id ?? '')
   const [quantity, setQuantity] = useState(job ? String(job.quantity) : '')
   const [slots, setSlots] = useState<Slot[]>(() =>
-    job && job.production_job_sides?.length ? sortedSides(job).map((x) => newSlot(x.print_side, x.colours)) : [newSlot()],
+    job && job.production_job_sides?.length
+      ? sortedSides(job)
+          // B/B F and B/B B share one slot: show it once.
+          .filter((x, i, all) => !isBB(x.print_side) || all.findIndex((y) => isBB(y.print_side)) === i)
+          .map((x) => newSlot(x.print_side, x.colours))
+      : [newSlot()],
   )
   const [errors, setErrors] = useState<string[]>([])
   const [busy, setBusy] = useState(false)
+  const errorBox = useRef<HTMLDivElement>(null)
+  // Show the full list of problems where the user is looking.
+  useEffect(() => {
+    if (errors.length) errorBox.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+  }, [errors])
 
   // Active paper types, plus the job's own paper type even if it was made inactive later.
   const paperOptions = useMemo(
@@ -414,32 +426,12 @@ function JobForm({ job, readOnly, canEdit, papers, onEdit, onClose, onSaved }: F
       quantity: Number(quantity),
     }
     const sides = slots.map((x) => ({ print_side: x.print_side, colours: cleanColours(x.colours).colours }))
-    const problems: string[] = []
-    if (!values.plan_date) problems.push('Date is required.')
-    if (!values.order_no) problems.push('Order Number is required.')
-    if (!values.job_name) problems.push('Job Name is required.')
-    if (!ups.trim() || !Number.isInteger(values.ups) || values.ups <= 0) problems.push('UPS must be a whole number above zero.')
-    if (!values.job_type) problems.push('Select a Job Type.')
-    if (!values.paper_type_id) problems.push('Select a Type of Paper.')
-    if (!quantity.trim() || !Number.isInteger(values.quantity) || values.quantity <= 0) {
-      problems.push('Quantity must be a whole number of sheets above zero.')
-    }
-    if (!sides.length) problems.push('Add at least one print side with its colours.')
-    sides.forEach((x, i) => {
-      if (!x.print_side) problems.push(`Print side slot ${i + 1}: select the Print Side.`)
-      else if (!x.colours.length) problems.push(`${x.print_side}: enter at least one colour.`)
-    })
-    if (new Set(usedSides).size !== usedSides.length) problems.push('Each print side can be added only once.')
-    if (new Set(usedSides.map(sideGroup)).size > 1) {
-      problems.push('Print sides cannot be mixed: O/S stands alone; F/S pairs with B/S; B/B F pairs with B/B B.')
-    }
-    if (problems.length) return setErrors(problems)
-
+    // Every rule is checked on the server, which lists all problems at once.
     setBusy(true)
     setErrors([])
     const { data, error } = await supabase.rpc('save_production_job', {
       p_id: job?.id ?? null,
-      p_job: values,
+      p_job: { ...values, ups: ups.trim() ? values.ups : null, quantity: quantity.trim() ? values.quantity : null },
       p_sides: sides,
       p_expected_updated_at: job?.updated_at ?? null,
     })
@@ -554,9 +546,14 @@ function JobForm({ job, readOnly, canEdit, papers, onEdit, onClose, onSaved }: F
                         <option
                           key={x}
                           value={x}
-                          disabled={x !== slot.print_side && (usedSides.includes(x) || (group !== '' && sideGroup(x) !== group && slots.length > 1))}
+                          disabled={
+                            x !== slot.print_side &&
+                            (usedSides.includes(x) ||
+                              (isBB(x) && slots.some((o) => o.key !== slot.key && isBB(o.print_side))) ||
+                              (group !== '' && sideGroup(x) !== group && slots.length > 1))
+                          }
                         >
-                          {x}
+                          {isBB(x) ? `${x} (covers B/B F + B/B B)` : x}
                         </option>
                       ))}
                     </select>
@@ -572,6 +569,11 @@ function JobForm({ job, readOnly, canEdit, papers, onEdit, onClose, onSaved }: F
                     </button>
                   )}
                 </div>
+                {isBB(slot.print_side) && (
+                  <p className="notice info">
+                    B/B F and B/B B are printed together: this slot plans both sides, with the same colours.
+                  </p>
+                )}
                 <div className="colour-grid">
                   {slot.colours.map((c, i) => (
                     <label key={i} className={`field ${dupKeys.has(tidy(c).toLowerCase()) && tidy(c) ? 'dup' : ''}`}>
@@ -598,7 +600,7 @@ function JobForm({ job, readOnly, canEdit, papers, onEdit, onClose, onSaved }: F
               </fieldset>
             )
           })}
-          {!readOnly && slots.length < PLAN_SIDES.length && (
+          {!readOnly && !slots.some((x) => isBB(x.print_side) || x.print_side === 'O/S') && slots.length < 2 && (
             <button type="button" onClick={() => setSlots((list) => [...list, newSlot()])}>
               <Plus size={16} /> Add Print Side
             </button>
@@ -611,10 +613,13 @@ function JobForm({ job, readOnly, canEdit, papers, onEdit, onClose, onSaved }: F
           </p>
         )}
         {errors.length > 0 && (
-          <div className="notice error">
-            {errors.map((x) => (
-              <div key={x}>{x}</div>
-            ))}
+          <div className="notice error" ref={errorBox} role="alert">
+            <b>Please fix {errors.length === 1 ? 'this' : `these ${errors.length} items`} and save again:</b>
+            <ul className="error-list">
+              {[...new Set(errors)].map((x) => (
+                <li key={x}>{x}</li>
+              ))}
+            </ul>
           </div>
         )}
       </form>

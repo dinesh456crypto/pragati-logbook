@@ -1453,3 +1453,38 @@ button.small,
     flex-wrap: wrap;
   }
 }
+
+.auto-save {
+  flex: 1;
+  min-width: 0;
+  font-size: 12.5px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.auto-save.ok {
+  color: #176c45;
+}
+
+.auto-save.error {
+  color: var(--danger);
+}
+
+@media (max-width: 600px) {
+  .auto-save {
+    order: -1;
+    flex-basis: 100%;
+  }
+  .entry-footer {
+    flex-wrap: wrap;
+  }
+}
+
+.error-list {
+  margin: 6px 0 0;
+  padding-left: 18px;
+}
+
+.error-list li {
+  margin: 2px 0;
+}

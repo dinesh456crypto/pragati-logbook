@@ -141,6 +141,9 @@ node supabase/tests/timeline_downtime.test.mjs \
   supabase/migrations/20261113150000_phase3_production_plan.sql \
   supabase/migrations/20261114100000_phase4_production_entry.sql \
   supabase/migrations/20261115100000_phase4b_sides_timeline_downtime.sql
+
+node supabase/tests/plan_bb.test.mjs <the five migrations above> \
+  supabase/migrations/20261116100000_phase4c_bb_one_slot.sql
 ```
 
 ## Importing data from the old Google Sheets system
