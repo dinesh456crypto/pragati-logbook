@@ -5,8 +5,11 @@ export const LOGIN_DOMAIN = 'pragati.internal'
 
 const USERNAME_PATTERN = /^[a-z0-9][a-z0-9._-]{2,39}$/
 
+// Accepts "dinesh", " Dinesh " and the internal login form "dinesh@pragati.internal".
 export function normaliseUsername(value: string): string {
-  return value.trim().toLowerCase()
+  const v = value.trim().toLowerCase()
+  const suffix = `@${LOGIN_DOMAIN}`
+  return v.endsWith(suffix) ? v.slice(0, -suffix.length) : v
 }
 
 export function isValidUsername(value: string): boolean {

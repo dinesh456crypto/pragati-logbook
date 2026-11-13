@@ -22,7 +22,11 @@ export function LoginPage() {
   async function submit(e: FormEvent) {
     e.preventDefault()
     if (!isValidUsername(username)) {
-      setNotice('Invalid username or password.')
+      setNotice(
+        username.includes('@')
+          ? 'Enter your username (for example: dinesh), not an email address.'
+          : 'Usernames are 3–40 letters or numbers, without spaces (for example: dinesh).',
+      )
       return
     }
     setBusy(true)
