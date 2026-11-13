@@ -85,7 +85,7 @@ export function Sidebar({ collapsed, mobileOpen, onNavigate }: Props) {
                         key={i.path}
                         to={i.path}
                         end
-                        className={({ isActive }) => (isActive ? 'active' : '')}
+                        className={current?.item.path === i.path ? 'active' : ''}
                         onClick={onNavigate}
                       >
                         {i.label}

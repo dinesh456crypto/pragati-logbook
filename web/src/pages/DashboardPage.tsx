@@ -106,7 +106,7 @@ export function DashboardPage() {
         </div>
         <div className="actions">
           {can('production_entry', 'create') && (
-            <Link to="/production/entry" className="button primary">
+            <Link to="/production/entry/new" className="button primary">
               <Plus size={18} /> New Production Entry
             </Link>
           )}

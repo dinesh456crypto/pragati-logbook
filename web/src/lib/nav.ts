@@ -85,10 +85,17 @@ export const NAV: NavModule[] = [
   },
 ]
 
+// The menu item a page belongs to: an exact match, or the longest menu path the
+// page sits under (for example /production/entry/new belongs to Production Entry).
 export function findNav(pathname: string): { module: NavModule; item: NavItem } | null {
+  let best: { module: NavModule; item: NavItem } | null = null
   for (const module of NAV) {
-    const item = module.items.find((i) => i.path === pathname)
-    if (item) return { module, item }
+    for (const item of module.items) {
+      if (pathname === item.path) return { module, item }
+      if (pathname.startsWith(item.path + '/') && (!best || item.path.length > best.item.path.length)) {
+        best = { module, item }
+      }
+    }
   }
-  return null
+  return best
 }

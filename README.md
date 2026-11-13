@@ -128,6 +128,12 @@ node supabase/tests/production_plan.test.mjs \
   supabase/migrations/20261112120000_foundation.sql \
   supabase/migrations/20261113120000_phase1_permissions_masters.sql \
   supabase/migrations/20261113150000_phase3_production_plan.sql
+
+node supabase/tests/production_entry.test.mjs \
+  supabase/migrations/20261112120000_foundation.sql \
+  supabase/migrations/20261113120000_phase1_permissions_masters.sql \
+  supabase/migrations/20261113150000_phase3_production_plan.sql \
+  supabase/migrations/20261114100000_phase4_production_entry.sql
 ```
 
 ## Importing data from the old Google Sheets system

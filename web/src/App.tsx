@@ -10,6 +10,8 @@ import { DashboardPage } from './pages/DashboardPage'
 import { ComingSoonPage } from './pages/ComingSoonPage'
 import { MasterPage } from './pages/MasterPage'
 import { JobsPage } from './pages/JobsPage'
+import { ProductionEntriesPage } from './pages/ProductionEntriesPage'
+import { ProductionEntryPage } from './pages/ProductionEntryPage'
 import { ToastProvider } from './components/Toast'
 import { MASTERS } from './lib/masters'
 
@@ -17,6 +19,7 @@ import { MASTERS } from './lib/masters'
 const BUILT: Record<string, ComponentType> = {
   '/dashboard': DashboardPage,
   '/plan/jobs': JobsPage,
+  '/production/entry': ProductionEntriesPage,
   ...Object.fromEntries(MASTERS.map((m) => [`/masters/${m.slug}`, MasterPage])),
 }
 
@@ -39,6 +42,13 @@ export default function App() {
               />
               <Route element={<AppShell />}>
                 <Route index element={<HomeRedirect />} />
+                {/* Production Entry form: new needs Create; an existing entry opens in view or edit mode. */}
+                <Route element={<RequirePermission resource="production_entry" action="create" />}>
+                  <Route path="production/entry/new" element={<ProductionEntryPage />} />
+                </Route>
+                <Route element={<RequirePermission resource="production_entry" />}>
+                  <Route path="production/entry/:id" element={<ProductionEntryPage />} />
+                </Route>
                 {NAV.flatMap((m) => m.items).map((item) => {
                   const Page = BUILT[item.path] ?? ComingSoonPage
                   return (
