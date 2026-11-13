@@ -84,7 +84,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       email: usernameToEmail(username),
       password,
     })
-    if (authError) throw new Error('Invalid username or password.')
+    if (authError) {
+      // A failed connection is not a wrong password.
+      const offline = authError.status === 0 || /fetch|network/i.test(authError.message) || authError.name === 'AuthRetryableFetchError'
+      throw new Error(offline ? 'Cannot reach the server. Check the internet connection and try again.' : 'Invalid username or password.')
+    }
   }, [])
 
   const signOut = useCallback(async () => {

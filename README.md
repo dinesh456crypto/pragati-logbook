@@ -147,3 +147,11 @@ node supabase/tests/timeline_downtime.test.mjs \
 
 Planned. The new system starts empty; an admin import tool for the old logbook's jobs, downtime
 and master lists will be added later.
+
+## Why the app calls `/supabase/...`
+
+Some Indian internet providers block `*.supabase.co`. The live site therefore sends
+all database and sign-in calls to its own address (`/supabase/...`), and the small
+Cloudflare Worker in `web/worker/index.js` forwards them to the Supabase project.
+Local development (`npm run dev`) still talks to Supabase directly.
+
