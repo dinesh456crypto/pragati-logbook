@@ -1,4 +1,4 @@
-// User management (create / edit / disable / reset password).
+// User management: create, edit, activate/deactivate, reset password, delete.
 // Creating login accounts and setting passwords needs the secret key, so it runs
 // here on the server and never in the browser. Profile, machine access and
 // permissions are saved by admin_save_user() using the caller's own session, so
@@ -23,8 +23,10 @@ interface PermissionRow {
   delete: boolean
 }
 
+type Action = 'create' | 'update' | 'set_active' | 'reset_password' | 'delete'
+
 interface Payload {
-  action: 'create' | 'update'
+  action: Action
   id?: string
   username?: string
   fullName: string
@@ -83,15 +85,46 @@ Deno.serve(async (req) => {
     if (whoError || !who.user) return reply(401, { error: 'Please sign in again.' })
 
     const body = (await req.json()) as Payload
-    if (!body || !['create', 'update'].includes(body.action)) throw new Error('Invalid request.')
-    if (!Array.isArray(body.machineIds)) throw new Error('Invalid machine list.')
+    const actions: Action[] = ['create', 'update', 'set_active', 'reset_password', 'delete']
+    if (!body || !actions.includes(body.action)) throw new Error('Invalid request.')
     if (body.password) checkPassword(body.password)
 
-    const { data: allowed } = await asCaller.rpc('has_perm', {
-      p_resource: 'users',
-      p_action: body.action === 'create' ? 'create' : 'edit',
-    })
-    if (!allowed) return reply(403, { error: 'You do not have permission to manage users.' })
+    const need = body.action === 'create' ? 'create' : body.action === 'delete' ? 'delete' : 'edit'
+    const { data: allowed } = await asCaller.rpc('has_perm', { p_resource: 'users', p_action: need })
+    if (!allowed) return reply(403, { error: `You do not have permission to ${need} users.` })
+
+    // Activate / deactivate: the database checks the rules, then the login is (un)banned.
+    if (body.action === 'set_active') {
+      if (!body.id) throw new Error('Missing user id.')
+      const { data: profile, error: rpcError } = await asCaller.rpc('admin_set_user_active', { p_id: body.id, p_active: !!body.active })
+      if (rpcError) throw new Error(rpcError.message)
+      const { error } = await service.auth.admin.updateUserById(body.id, { ban_duration: body.active ? 'none' : BANNED_FOR })
+      if (error) throw new Error(`Status saved, but the login could not be updated: ${error.message}`)
+      return reply(200, { ok: true, profile })
+    }
+
+    // Password reset: a temporary password the user must change at next sign-in.
+    if (body.action === 'reset_password') {
+      if (!body.id) throw new Error('Missing user id.')
+      if (!body.password) throw new Error('Enter the new temporary password.')
+      const { data: profile, error: rpcError } = await asCaller.rpc('admin_mark_password_reset', { p_id: body.id })
+      if (rpcError) throw new Error(rpcError.message)
+      const { error } = await service.auth.admin.updateUserById(body.id, { password: body.password })
+      if (error) throw new Error(`The password could not be changed: ${error.message}`)
+      return reply(200, { ok: true, profile })
+    }
+
+    // Delete: only users without any records (the database refuses otherwise).
+    if (body.action === 'delete') {
+      if (!body.id) throw new Error('Missing user id.')
+      const { error: rpcError } = await asCaller.rpc('admin_delete_user', { p_id: body.id })
+      if (rpcError) throw new Error(rpcError.message)
+      const { error } = await service.auth.admin.deleteUser(body.id)
+      if (error) throw new Error(`The user was removed, but the login could not be deleted: ${error.message}`)
+      return reply(200, { ok: true })
+    }
+
+    if (!Array.isArray(body.machineIds)) throw new Error('Invalid machine list.')
 
     const save = (id: string, username: string) =>
       asCaller.rpc('admin_save_user', {

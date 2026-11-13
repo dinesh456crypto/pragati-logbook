@@ -47,6 +47,8 @@ supabase/
   only the Super Admin can change permissions). The service-role key
   stays on the server. New and reset passwords are temporary and must be changed at next sign-in.
 - Disabling a user bans them in Auth and removes their data access immediately.
+- A user can be deleted only if they never created or changed any record; otherwise deactivate them,
+  so the audit trail and "created by" names stay intact. The Super Admin cannot be deactivated or deleted.
 
 ## One-time setup
 
@@ -150,6 +152,7 @@ node supabase/tests/downtime_reports.test.mjs <the six migrations above> \
 
 node supabase/tests/ink_formula.test.mjs $(ls supabase/migrations/*.sql | sort | grep -v phase9)
 node supabase/tests/wastage.test.mjs $(ls supabase/migrations/*.sql | sort)
+node supabase/tests/users.test.mjs $(ls supabase/migrations/*.sql | sort)
 ```
 
 Reports: the dashboard and Production Log Summary count only submitted entries.

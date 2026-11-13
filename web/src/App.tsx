@@ -19,6 +19,8 @@ import { InkSummaryPage } from './pages/InkSummaryPage'
 import { InkFormulaPage } from './pages/InkFormulaPage'
 import { WastageEntryPage } from './pages/WastageEntryPage'
 import { WastageSummaryPage } from './pages/WastageSummaryPage'
+import { UsersPage } from './pages/UsersPage'
+import { UserFormPage } from './pages/UserFormPage'
 import { ToastProvider } from './components/Toast'
 import { MASTERS } from './lib/masters'
 
@@ -34,6 +36,8 @@ const BUILT: Record<string, ComponentType> = {
   '/ink/summary': InkSummaryPage,
   '/wastage/entry': WastageEntryPage,
   '/wastage/summary': WastageSummaryPage,
+  '/users': UsersPage,
+  '/users/new': UserFormPage,
   ...Object.fromEntries(MASTERS.map((m) => [`/masters/${m.slug}`, MasterPage])),
 }
 
@@ -62,6 +66,9 @@ export default function App() {
                 </Route>
                 <Route element={<RequirePermission resource="production_entry" />}>
                   <Route path="production/entry/:id" element={<ProductionEntryPage />} />
+                </Route>
+                <Route element={<RequirePermission resource="users" action="edit" />}>
+                  <Route path="users/:id" element={<UserFormPage key="edit-user" />} />
                 </Route>
                 <Route element={<RequirePermission resource="ink_formula" />}>
                   <Route path="ink/summary/:id" element={<InkFormulaPage />} />
