@@ -6,7 +6,19 @@ import { supabase } from '../lib/supabase'
 import { useAuth } from '../lib/auth'
 import { plantDate } from '../lib/dates'
 import { friendlyError } from '../lib/errors'
-import { JOB_COLUMNS, JOB_TYPES, MAX_COLOURS, cleanColours, formatDate, formatNumber, searchPattern, tidy } from '../lib/jobs'
+import {
+  JOB_COLUMNS,
+  JOB_TYPES,
+  PLAN_SIDES,
+  SLOT_START_COLOURS,
+  cleanColours,
+  formatDate,
+  formatNumber,
+  searchPattern,
+  sideGroup,
+  sortedSides,
+  tidy,
+} from '../lib/jobs'
 import type { Job } from '../lib/jobs'
 import { ConfirmDialog, Modal } from '../components/Modal'
 import { useToast } from '../components/Toast'
@@ -126,7 +138,7 @@ export function JobsPage() {
     }
   }
 
-  const headers = ['S.No', 'Date', 'Order No', 'Job Name', 'Category', 'UPS', 'Job Type', 'Paper Type', 'Qty (Sheets)', '']
+  const headers = ['S.No', 'Date', 'Order No', 'Job Name', 'Category', 'Print Sides', 'UPS', 'Job Type', 'Paper Type', 'Qty (Sheets)', '']
 
   return (
     <>
@@ -232,6 +244,7 @@ export function JobsPage() {
                     </td>
                     <td className="wrap">{j.job_name}</td>
                     <td>{j.category}</td>
+                    <td>{sortedSides(j).map((x) => x.print_side).join(', ')}</td>
                     <td className="num">{j.ups}</td>
                     <td>{j.job_type}</td>
                     <td>{j.paper_types?.name}</td>
@@ -342,7 +355,23 @@ interface FormProps {
   onSaved: (orderNo: string, isNew: boolean) => void
 }
 
-const padColours = (list: string[]) => Array.from({ length: MAX_COLOURS }, (_, i) => list[i] ?? '')
+interface Slot {
+  key: number
+  print_side: string
+  colours: string[]
+}
+
+let slotKey = 0
+const newSlot = (print_side = '', colours: string[] = []): Slot => ({
+  key: ++slotKey,
+  print_side,
+  colours: Array.from({ length: Math.max(SLOT_START_COLOURS, colours.length) }, (_, i) => colours[i] ?? ''),
+})
+
+type SaveReply =
+  | { ok: true; id: string; updated_at: string }
+  | { ok: false; code: 'INVALID'; errors: { field: string; message: string }[] }
+  | { ok: false; code: 'STALE'; message: string }
 
 function JobForm({ job, readOnly, canEdit, papers, onEdit, onClose, onSaved }: FormProps) {
   const [date, setDate] = useState(job?.plan_date ?? plantDate())
@@ -353,20 +382,22 @@ function JobForm({ job, readOnly, canEdit, papers, onEdit, onClose, onSaved }: F
   const [jobType, setJobType] = useState<string>(job?.job_type ?? '')
   const [paperId, setPaperId] = useState(job?.paper_type_id ?? '')
   const [quantity, setQuantity] = useState(job ? String(job.quantity) : '')
-  const [colours, setColours] = useState(() => padColours(job?.colours ?? []))
-  const [error, setError] = useState('')
+  const [slots, setSlots] = useState<Slot[]>(() =>
+    job && job.production_job_sides?.length ? sortedSides(job).map((x) => newSlot(x.print_side, x.colours)) : [newSlot()],
+  )
+  const [errors, setErrors] = useState<string[]>([])
   const [busy, setBusy] = useState(false)
 
-  const { repeated } = useMemo(() => cleanColours(colours), [colours])
-  const repeatedKeys = useMemo(() => new Set(repeated.map((c) => c.toLowerCase())), [repeated])
   // Active paper types, plus the job's own paper type even if it was made inactive later.
   const paperOptions = useMemo(
     () => papers.filter((p) => p.active || p.id === job?.paper_type_id),
     [papers, job?.paper_type_id],
   )
+  const usedSides = slots.map((x) => x.print_side).filter(Boolean)
+  const group = usedSides.map(sideGroup).find(Boolean) ?? ''
 
-  const setColour = useCallback((index: number, value: string) => {
-    setColours((list) => list.map((c, i) => (i === index ? value : c)))
+  const setSlot = useCallback((key: number, patch: Partial<Slot>) => {
+    setSlots((list) => list.map((x) => (x.key === key ? { ...x, ...patch } : x)))
   }, [])
 
   async function submit(e: FormEvent) {
@@ -381,33 +412,43 @@ function JobForm({ job, readOnly, canEdit, papers, onEdit, onClose, onSaved }: F
       job_type: jobType,
       paper_type_id: paperId,
       quantity: Number(quantity),
-      colours: cleanColours(colours).colours,
     }
-    if (!values.plan_date) return setError('Date is required.')
-    if (!values.order_no) return setError('Order Number is required.')
-    if (!values.job_name) return setError('Job Name is required.')
-    if (!ups.trim() || !Number.isInteger(values.ups) || values.ups <= 0) return setError('UPS must be a whole number above zero.')
-    if (!values.job_type) return setError('Select a Job Type.')
-    if (!values.paper_type_id) return setError('Select a Type of Paper.')
+    const sides = slots.map((x) => ({ print_side: x.print_side, colours: cleanColours(x.colours).colours }))
+    const problems: string[] = []
+    if (!values.plan_date) problems.push('Date is required.')
+    if (!values.order_no) problems.push('Order Number is required.')
+    if (!values.job_name) problems.push('Job Name is required.')
+    if (!ups.trim() || !Number.isInteger(values.ups) || values.ups <= 0) problems.push('UPS must be a whole number above zero.')
+    if (!values.job_type) problems.push('Select a Job Type.')
+    if (!values.paper_type_id) problems.push('Select a Type of Paper.')
     if (!quantity.trim() || !Number.isInteger(values.quantity) || values.quantity <= 0) {
-      return setError('Quantity must be a whole number of sheets above zero.')
+      problems.push('Quantity must be a whole number of sheets above zero.')
     }
+    if (!sides.length) problems.push('Add at least one print side with its colours.')
+    sides.forEach((x, i) => {
+      if (!x.print_side) problems.push(`Print side slot ${i + 1}: select the Print Side.`)
+      else if (!x.colours.length) problems.push(`${x.print_side}: enter at least one colour.`)
+    })
+    if (new Set(usedSides).size !== usedSides.length) problems.push('Each print side can be added only once.')
+    if (new Set(usedSides.map(sideGroup)).size > 1) {
+      problems.push('Print sides cannot be mixed: O/S stands alone; F/S pairs with B/S; B/B F pairs with B/B B.')
+    }
+    if (problems.length) return setErrors(problems)
 
     setBusy(true)
-    setError('')
-    const result = job
-      ? await supabase.from('production_jobs').update(values).eq('id', job.id).select('id')
-      : await supabase.from('production_jobs').insert(values).select('id')
+    setErrors([])
+    const { data, error } = await supabase.rpc('save_production_job', {
+      p_id: job?.id ?? null,
+      p_job: values,
+      p_sides: sides,
+      p_expected_updated_at: job?.updated_at ?? null,
+    })
     setBusy(false)
-    if (result.error) {
-      return setError(
-        result.error.code === '23505'
-          ? `Order Number ${values.order_no} already exists. Each order can be planned only once.`
-          : friendlyError(result.error, 'job'),
-      )
-    }
-    if (!result.data?.length) return setError('You do not have permission to do this.')
-    onSaved(values.order_no, !job)
+    if (error) return setErrors([friendlyError(error, 'job')])
+    const reply = data as SaveReply
+    if (reply.ok) return onSaved(values.order_no, !job)
+    if (reply.code === 'INVALID') return setErrors(reply.errors.map((x) => x.message))
+    setErrors([reply.message])
   }
 
   const title = readOnly ? `Job ${job?.order_no ?? ''}` : job ? `Edit job ${job.order_no}` : 'Create new job'
@@ -492,34 +533,90 @@ function JobForm({ job, readOnly, canEdit, papers, onEdit, onClose, onSaved }: F
           </label>
         </div>
 
-        <fieldset className="colour-set">
-          <legend>Colours (up to 9, e.g. C, M, Y, K, PMS 185, Varnish; leave unused boxes empty)</legend>
-          <div className="colour-grid">
-            {colours.map((c, i) => (
-              <label key={i} className={`field ${repeatedKeys.has(tidy(c).toLowerCase()) && tidy(c) ? 'dup' : ''}`}>
-                <span>Colour {i + 1}</span>
-                <input
-                  value={c}
-                  onChange={(e) => setColour(i, e.target.value)}
-                  maxLength={40}
-                  disabled={readOnly}
-                />
-              </label>
-            ))}
+        <div className="slots">
+          <div className="slots-head">
+            <h3>Print sides and colours</h3>
+            <span className="muted small">One slot per print side. Production Entry shows only the colours of the side being printed.</span>
           </div>
-          {repeated.length > 0 && !readOnly && (
-            <p className="notice warn">
-              Entered more than once: <b>{repeated.join(', ')}</b>. Each colour will be saved only once.
-            </p>
+          {slots.map((slot, n) => {
+            const { repeated } = cleanColours(slot.colours)
+            const dupKeys = new Set(repeated.map((c) => c.toLowerCase()))
+            const sameSide = slot.print_side && usedSides.filter((x) => x === slot.print_side).length > 1
+            return (
+              <fieldset key={slot.key} className="colour-set slot">
+                <legend>Print side slot {n + 1}</legend>
+                <div className="slot-top">
+                  <label className={`field ${sameSide ? 'invalid' : ''}`}>
+                    <span>Print Side *</span>
+                    <select value={slot.print_side} disabled={readOnly} onChange={(e) => setSlot(slot.key, { print_side: e.target.value })}>
+                      <option value="">Select…</option>
+                      {PLAN_SIDES.map((x) => (
+                        <option
+                          key={x}
+                          value={x}
+                          disabled={x !== slot.print_side && (usedSides.includes(x) || (group !== '' && sideGroup(x) !== group && slots.length > 1))}
+                        >
+                          {x}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  {!readOnly && slots.length > 1 && (
+                    <button
+                      type="button"
+                      className="small danger-text"
+                      onClick={() => setSlots((list) => list.filter((x) => x.key !== slot.key))}
+                      aria-label={`Remove print side slot ${n + 1}`}
+                    >
+                      <Trash2 size={15} /> Remove side
+                    </button>
+                  )}
+                </div>
+                <div className="colour-grid">
+                  {slot.colours.map((c, i) => (
+                    <label key={i} className={`field ${dupKeys.has(tidy(c).toLowerCase()) && tidy(c) ? 'dup' : ''}`}>
+                      <span>Colour {i + 1}</span>
+                      <input
+                        value={c}
+                        maxLength={40}
+                        disabled={readOnly}
+                        onChange={(e) => setSlot(slot.key, { colours: slot.colours.map((x, j) => (j === i ? e.target.value : x)) })}
+                      />
+                    </label>
+                  ))}
+                </div>
+                {!readOnly && (
+                  <button type="button" className="small" onClick={() => setSlot(slot.key, { colours: [...slot.colours, ''] })}>
+                    <Plus size={15} /> Add Colour
+                  </button>
+                )}
+                {repeated.length > 0 && !readOnly && (
+                  <p className="notice warn">
+                    Entered more than once: <b>{repeated.join(', ')}</b>. Each colour is saved once.
+                  </p>
+                )}
+              </fieldset>
+            )
+          })}
+          {!readOnly && slots.length < PLAN_SIDES.length && (
+            <button type="button" onClick={() => setSlots((list) => [...list, newSlot()])}>
+              <Plus size={16} /> Add Print Side
+            </button>
           )}
-        </fieldset>
+        </div>
 
         {job && (
           <p className="muted small">
             Created {new Date(job.created_at).toLocaleString('en-IN')} · Last modified {new Date(job.updated_at).toLocaleString('en-IN')}
           </p>
         )}
-        {error && <p className="notice error">{error}</p>}
+        {errors.length > 0 && (
+          <div className="notice error">
+            {errors.map((x) => (
+              <div key={x}>{x}</div>
+            ))}
+          </div>
+        )}
       </form>
     </Modal>
   )

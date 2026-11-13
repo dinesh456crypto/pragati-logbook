@@ -12,10 +12,13 @@ import {
   PRINT_SIDES,
   SECTIONS,
   UNIT_COUNT,
+  applyAutoStarts,
+  autoStartOf,
   changeoverRequired,
-  changeoverWindow,
-  compareStamps,
+  changeoverTotals,
   defaultProductionDate,
+  downtimePlacement,
+  emptyDowntime,
   entryLabel,
   formatDuration,
   formatMoment,
@@ -25,12 +28,22 @@ import {
   sectionOf,
   sideFamily,
   spanComplete,
-  stampFilled,
-  time12,
+  stampMs,
+  stepTimes,
   toPayload,
   wastageTotal,
 } from '../lib/production'
-import type { EntryRow, EntryState, FieldError, OrderOption, OrderStatus, Span } from '../lib/production'
+import type {
+  DowntimeDbRow,
+  EntryRow,
+  EntryState,
+  FieldError,
+  OrderOption,
+  OrderStatus,
+  Span,
+  StepKey,
+  Timeline,
+} from '../lib/production'
 import type { Machine } from '../lib/types'
 import { plantDate } from '../lib/dates'
 import { OrderPicker } from '../components/OrderPicker'
@@ -124,6 +137,12 @@ function EntryEditor({ entryId }: { entryId: string | null }) {
   const coatings = useOptions('coatings')
   const papers = useOptions('paper_types')
   const reasons = useOptions('wastage_reasons')
+  const bdtReasons = useOptions('bdt_reasons')
+  const odtReasons = useOptions('odt_reasons')
+  const [timeline, setTimeline] = useState<Timeline | null>(null)
+  // Latest order status, for rules applied inside state updates.
+  const statusRef = useRef<OrderStatus | null>(null)
+  const readyRef = useRef<ReturnType<typeof isoToStamp> | null>(null)
 
   const editable =
     meta.status === 'submitted'
@@ -152,6 +171,41 @@ function EntryEditor({ entryId }: { entryId: string | null }) {
       .then(({ data }) => setMyMachines((data ?? []).map((r: { machine_id: string }) => r.machine_id)))
   }, [profile])
 
+  // Fills the automatic start times (each step starts when the previous one ended).
+  // For a submitted entry the first step is never moved to a new machine-ready time.
+  const withAuto = useCallback(
+    (s: EntryState, submitted = meta.status === 'submitted') =>
+      applyAutoStarts(
+        s,
+        submitted ? null : readyRef.current,
+        changeoverRequired(s.print_side, s.continuing, statusRef.current?.is_first ?? true),
+      ),
+    [meta.status],
+  )
+
+  const timelineRequest = useRef(0)
+  const fetchTimeline = useCallback(
+    async (machineId: string, submitted: boolean) => {
+      const ticket = ++timelineRequest.current
+      if (!machineId) {
+        setTimeline(null)
+        readyRef.current = null
+        return
+      }
+      const { data, error } = await supabase.rpc('machine_timeline', { p_machine_id: machineId, p_entry_id: meta.id })
+      if (ticket !== timelineRequest.current) return
+      if (error) {
+        notify('error', friendlyError(error))
+        return
+      }
+      const t = data as Timeline
+      setTimeline(t)
+      readyRef.current = t.ready_at ? isoToStamp(t.ready_at) : null
+      setSt((cur) => withAuto(cur, submitted))
+    },
+    [meta.id, notify, withAuto],
+  )
+
   const statusRequest = useRef(0)
   const fetchStatus = useCallback(
     async (orderNo: string, machineId: string): Promise<OrderStatus | null> => {
@@ -169,6 +223,7 @@ function EntryEditor({ entryId }: { entryId: string | null }) {
         return null
       }
       setStatus(data as OrderStatus)
+      statusRef.current = data as OrderStatus
       return data as OrderStatus
     },
     [meta.id, notify],
@@ -180,7 +235,12 @@ function EntryEditor({ entryId }: { entryId: string | null }) {
     Promise.all([
       supabase.from('production_entries').select('*').eq('id', entryId).maybeSingle(),
       supabase.from('production_entry_wastage').select('quantity, reason_id').eq('entry_id', entryId).order('line'),
-    ]).then(([entry, wastage]) => {
+      supabase
+        .from('downtime_events')
+        .select('kind, start_at, end_at, bdt_reason_id, odt_reason_id, remarks')
+        .eq('entry_id', entryId)
+        .order('line'),
+    ]).then(async ([entry, wastage, downtime]) => {
       if (!alive) return
       setLoading(false)
       if (entry.error || !entry.data) {
@@ -188,14 +248,23 @@ function EntryEditor({ entryId }: { entryId: string | null }) {
         return
       }
       const row = entry.data as EntryRow
-      setSt(fromRow(row, (wastage.data ?? []) as { quantity: number | null; reason_id: string | null }[]))
+      setSt(
+        fromRow(
+          row,
+          (wastage.data ?? []) as { quantity: number | null; reason_id: string | null }[],
+          (downtime.data ?? []) as DowntimeDbRow[],
+        ),
+      )
       setMeta({ id: row.id, entryNo: row.entry_no, status: row.status, updatedAt: row.updated_at, createdBy: row.created_by })
-      fetchStatus(row.order_no ?? '', row.machine_id)
+      await fetchStatus(row.order_no ?? '', row.machine_id)
+      if (alive) fetchTimeline(row.machine_id, row.status === 'submitted')
     })
     return () => {
       alive = false
     }
-  }, [entryId, fetchStatus])
+    // Loads once per entry; the look-ups only depend on the entry id.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [entryId])
 
   // Keep the open section's tab in view (the tab row scrolls on phones).
   useEffect(() => {
@@ -211,10 +280,13 @@ function EntryEditor({ entryId }: { entryId: string | null }) {
   }, [dirty])
 
   // ---- Changing values ------------------------------------------------------------
-  const update = useCallback((patch: Partial<EntryState>) => {
-    setSt((s) => ({ ...s, ...patch }))
-    setDirty(true)
-  }, [])
+  const update = useCallback(
+    (patch: Partial<EntryState>) => {
+      setSt((s) => withAuto({ ...s, ...patch }))
+      setDirty(true)
+    },
+    [withAuto],
+  )
 
   const machineChoices = useMemo(
     () =>
@@ -231,34 +303,70 @@ function EntryEditor({ entryId }: { entryId: string | null }) {
       machine_speed: st.machine_speed || (machine ? String(machine.default_speed) : ''),
     })
     fetchStatus(st.order_no, machineId)
+    fetchTimeline(machineId, meta.status === 'submitted')
   }
 
   async function chooseOrder(orderNo: string) {
     update({ order_no: orderNo })
     if (!orderNo) {
       setStatus(null)
+      statusRef.current = null
       return
     }
     const s = await fetchStatus(orderNo, st.machine_id)
-    const job = s?.job ?? s?.last_entry_job
-    if (!job) return
-    const colours = job.colours ?? []
-    setSt((cur) => ({
-      ...cur,
-      order_no: orderNo,
-      job_name: job.job_name ?? '',
-      category: job.category ?? '',
-      ups: job.ups == null ? '' : String(job.ups),
-      job_type: job.job_type ?? '',
-      paper_type_id: job.paper_type_id ?? '',
-      planned_quantity: job.quantity == null ? '' : String(job.quantity),
-      planned_colours: Array.from({ length: 9 }, (_, i) => colours[i] ?? ''),
-      // Fill Units 1–7 in order when nothing is allocated yet.
-      unit_colours: cur.unit_colours.some(Boolean)
-        ? cur.unit_colours
-        : Array.from({ length: UNIT_COUNT }, (_, i) => colours[i] ?? ''),
-    }))
+    if (!s) return
+    const job = s.job ?? s.last_entry_job
+    setSt((cur) => {
+      let next: EntryState = { ...cur, order_no: orderNo }
+      if (job) {
+        const planned = s.job?.sides.map((x) => x.print_side) ?? []
+        next = {
+          ...next,
+          job_name: job.job_name ?? '',
+          category: job.category ?? '',
+          ups: job.ups == null ? '' : String(job.ups),
+          job_type: job.job_type ?? '',
+          paper_type_id: job.paper_type_id ?? '',
+          planned_quantity: job.quantity == null ? '' : String(job.quantity),
+          // A planned order with a single print side: select it straight away.
+          print_side: s.job && planned.length === 1 ? planned[0] : s.job && !planned.includes(cur.print_side) ? '' : cur.print_side,
+        }
+      }
+      return withAuto(sideColours(next, s, true))
+    })
   }
+
+  function chooseSide(side: string) {
+    setSt((cur) => withAuto(sideColours({ ...cur, print_side: side }, statusRef.current, false)))
+    setDirty(true)
+  }
+
+  // ---- Start times ----------------------------------------------------------------
+  function setSpan(key: StepKey, span: Span) {
+    setSt((cur) => {
+      const old = cur[key]
+      const startChanged = span.start.date !== old.start.date || span.start.time !== old.start.time
+      const cleared = !span.start.date && !span.start.time && !span.end.date && !span.end.time
+      let manual = cur.manual_starts
+      if (cleared) manual = manual.filter((k) => k !== key)
+      else if (startChanged && !manual.includes(key)) manual = [...manual, key]
+      return withAuto({ ...cur, [key]: span, manual_starts: manual })
+    })
+    setDirty(true)
+  }
+
+  function resetStart(key: StepKey) {
+    setSt((cur) => withAuto({ ...cur, manual_starts: cur.manual_starts.filter((k) => k !== key) }))
+    setDirty(true)
+  }
+
+  const readyStamp = timeline?.ready_at && meta.status !== 'submitted' ? isoToStamp(timeline.ready_at) : null
+  const autoFor = (key: StepKey, source: string) => ({
+    manual: st.manual_starts.includes(key),
+    source,
+    value: autoStartOf(st, key, readyStamp),
+    onReset: () => resetStart(key),
+  })
 
   function chooseShift(shift: string) {
     const patch: Partial<EntryState> = { shift }
@@ -268,24 +376,6 @@ function EntryEditor({ entryId }: { entryId: string | null }) {
       patch.production_date = defaultProductionDate(shift)
     }
     update(patch)
-  }
-
-  function setSpan(key: 'make_ready' | 'registration' | 'colour_matching' | 'run', span: Span) {
-    setSt((cur) => {
-      const next = { ...cur, [key]: span }
-      // Production starts where the changeover ends: fill it in while it is empty or
-      // still following the changeover end (a different time typed by hand is kept).
-      if (key !== 'run') {
-        const before = changeoverWindow(cur)
-        const after = changeoverWindow(next)
-        const following = !stampFilled(cur.run.start) || (before && compareStamps(cur.run.start, before.end) === 0)
-        if (after && following && (!before || compareStamps(after.end, before.end) !== 0)) {
-          next.run = { ...cur.run, start: { ...after.end } }
-        }
-      }
-      return next
-    })
-    setDirty(true)
   }
 
   // ---- Derived -----------------------------------------------------------------------
@@ -305,7 +395,10 @@ function EntryEditor({ entryId }: { entryId: string | null }) {
   const plannedRepeats = cleanColours(st.planned_colours).repeated
   const isFirst = status?.is_first ?? true
   const required = changeoverRequired(st.print_side, st.continuing, isFirst)
-  const coWindow = changeoverWindow(st)
+  const totals = changeoverTotals(st)
+  const runTimes = stepTimes(st, 'run')
+  const plannedJob = status?.job ?? null
+  const plannedSides = plannedJob?.sides.map((x) => x.print_side) ?? []
   const wasteTotal = wastageTotal(st.wastage)
   const total = Number(st.total_sheets) || 0
   const accounted = (Number(st.ok_sheets) || 0) + (Number(st.separate_sheets) || 0) + wasteTotal
@@ -315,7 +408,7 @@ function EntryEditor({ entryId }: { entryId: string | null }) {
 
   // ---- Saving --------------------------------------------------------------------------
   async function callSave(submit: boolean, close: boolean): Promise<SaveResult | null> {
-    const { entry, wastage } = toPayload(st)
+    const { entry, wastage, downtime } = toPayload(st)
     const args = {
       p_id: meta.id,
       p_save_id: crypto.randomUUID(),
@@ -324,6 +417,7 @@ function EntryEditor({ entryId }: { entryId: string | null }) {
       p_wastage: wastage,
       p_expected_updated_at: meta.updatedAt,
       p_close_side: close,
+      p_downtime: downtime,
     }
     // Retry network failures with the same save id: the server applies it once.
     for (let attempt = 1; ; attempt++) {
@@ -446,12 +540,21 @@ function EntryEditor({ entryId }: { entryId: string | null }) {
         </datalist>
       </Field>
       <Field label="Print Side *" error={errorOf('print_side')}>
-        <select value={st.print_side} disabled={readOnly} onChange={(e) => update({ print_side: e.target.value })}>
+        <select value={st.print_side} disabled={readOnly} onChange={(e) => chooseSide(e.target.value)}>
           <option value="">Select…</option>
-          {PRINT_SIDES.map((s) => (
-            <option key={s}>{s}</option>
-          ))}
+          {PRINT_SIDES.map((s) =>
+            plannedJob && !plannedSides.includes(s) ? (
+              s === st.print_side ? (
+                <option key={s} value={s}>
+                  {s} (not planned)
+                </option>
+              ) : null
+            ) : (
+              <option key={s}>{s}</option>
+            ),
+          )}
         </select>
+        {plannedJob && <span className="hint">Planned sides: {plannedSides.join(', ') || 'none'}</span>}
       </Field>
       <Field label="Continuing Job? *" error={errorOf('continuing')}>
         <select value={st.continuing ? 'yes' : 'no'} disabled={readOnly} onChange={(e) => update({ continuing: e.target.value === 'yes' })}>
@@ -537,24 +640,53 @@ function EntryEditor({ entryId }: { entryId: string | null }) {
 
     // 3. Unit-wise Colour Allocation
     <div key="colours" className="form-stack">
-      <fieldset className="colour-set">
-        <legend>Job colours {status?.job ? '(from Production Plan, editable for this entry)' : '(enter the colours for this job)'}</legend>
-        <div className="colour-grid">
-          {st.planned_colours.map((c, i) => (
-            <label key={i} className="field">
-              <span>Colour {i + 1}</span>
-              <input
-                value={c}
-                maxLength={40}
-                disabled={readOnly}
-                onChange={(e) => update({ planned_colours: st.planned_colours.map((x, j) => (j === i ? e.target.value : x)) })}
-              />
-            </label>
-          ))}
+      {!st.print_side ? (
+        <p className="notice info">Select the Print Side in Job Details first. The colours follow the order and its print side.</p>
+      ) : plannedJob ? (
+        <div className="colour-set">
+          <p className="smallcaps">
+            Planned colours for {st.print_side} · order {st.order_no} (from Production Plan)
+          </p>
+          {planned.length ? (
+            <div className="chips">
+              {planned.map((c) => (
+                <span key={c} className="chip">
+                  {c}
+                </span>
+              ))}
+            </div>
+          ) : (
+            <p className="notice warn">
+              No colours are planned for {st.print_side} of this order. Choose a planned print side, or add {st.print_side} to
+              the order in Production Plan.
+            </p>
+          )}
         </div>
-        {plannedRepeats.length > 0 && <p className="notice warn">Entered more than once: {plannedRepeats.join(', ')}. Each colour is kept once.</p>}
-        {errorOf('planned_colours') && <p className="field-error">{errorOf('planned_colours')}</p>}
-      </fieldset>
+      ) : (
+        <fieldset className="colour-set">
+          <legend>Colours for {st.print_side} (order not in Production Plan: enter them here)</legend>
+          <div className="colour-grid">
+            {st.planned_colours.map((c, i) => (
+              <label key={i} className="field">
+                <span>Colour {i + 1}</span>
+                <input
+                  value={c}
+                  maxLength={40}
+                  disabled={readOnly}
+                  onChange={(e) => update({ planned_colours: st.planned_colours.map((x, j) => (j === i ? e.target.value : x)) })}
+                />
+              </label>
+            ))}
+          </div>
+          {!readOnly && (
+            <button type="button" className="small" onClick={() => update({ planned_colours: [...st.planned_colours, ''] })}>
+              <Plus size={15} /> Add Colour
+            </button>
+          )}
+          {plannedRepeats.length > 0 && <p className="notice warn">Entered more than once: {plannedRepeats.join(', ')}. Each colour is kept once.</p>}
+          {errorOf('planned_colours') && <p className="field-error">{errorOf('planned_colours')}</p>}
+        </fieldset>
+      )}
 
       {planned.length > UNIT_COUNT && (
         <p className="notice warn">This job has {planned.length} colours, but only seven printing units are available.</p>
@@ -617,56 +749,156 @@ function EntryEditor({ entryId }: { entryId: string | null }) {
             ? 'Changeover is optional: this is not the first B/B entry of this order. Any activity you start needs both Start and End.'
             : 'Changeover is optional for a continuing job. Any activity you start needs both Start and End.'}
       </p>
-      {status?.machine_free_since && (
-        <p className="notice info">
-          This machine was free from <b>{formatMoment(status.machine_free_since)}</b> (end of its last submitted entry).
-          {!readOnly && !stampFilled(st.make_ready.start) && (
-            <>
-              {' '}
-              <button
-                type="button"
-                className="small"
-                onClick={() => setSpan('make_ready', { ...st.make_ready, start: isoToStamp(status.machine_free_since) })}
-              >
-                Start Make Ready at that time
-              </button>
-            </>
-          )}
-        </p>
-      )}
+      <TimelinePanel timeline={timeline} machineCode={machine?.code} submitted={meta.status === 'submitted'} />
       <div className="time-cards">
-        {ACTIVITIES.map((a) => (
-          <TimeCard
-            key={a.key}
-            title={a.label}
-            span={st[a.key]}
-            required={required}
-            disabled={readOnly}
-            error={errorOf(a.key)}
-            onChange={(s) => setSpan(a.key, s)}
-          />
-        ))}
+        {ACTIVITIES.map((a, i) => {
+          const t = stepTimes(st, a.key)
+          return (
+            <TimeCard
+              key={a.key}
+              title={a.label}
+              span={st[a.key]}
+              required={required}
+              disabled={readOnly}
+              error={errorOf(a.key)}
+              downtime={t.downtime}
+              auto={autoFor(a.key, i === 0 ? 'machine ready time' : `${ACTIVITIES[i - 1].label} end`)}
+              onChange={(s) => setSpan(a.key, s)}
+            />
+          )
+        })}
+      </div>
+      <div className="totals">
+        <div>
+          <span>Total Gross Changeover</span>
+          <b>{formatDuration(totals.gross)}</b>
+        </div>
+        <div>
+          <span>Downtime inside changeover</span>
+          <b>{totals.gross === null ? '—' : formatDuration((totals.gross ?? 0) - (totals.net ?? 0))}</b>
+        </div>
+        <div>
+          <span>Total Net Changeover</span>
+          <b>{formatDuration(totals.net)}</b>
+        </div>
       </div>
       <p className="muted small">
-        Machine changeover time:{' '}
-        <b>{coWindow ? `${formatDuration(coWindow.minutes)} (${time12(coWindow.start.time)} to ${time12(coWindow.end.time)})` : '—'}</b>
-        . Activities can overlap, so this is the time from the earliest start to the latest end, not the sum.
+        Steps run one after another: Make Ready → Registration → Colour Matching → Production. Each start fills in
+        automatically from the previous end; you can change it, and reset it to the automatic time. Net time = gross time −
+        BDT/ODT inside that step (overlapping downtime is counted once).
       </p>
     </div>,
 
     // 5. Run Time
     <div key="run" className="form-stack">
-      <TimeCard title="Production Time" span={st.run} required disabled={readOnly} error={errorOf('run')} onChange={(s) => setSpan('run', s)}>
-        {!readOnly && coWindow && compareStamps(st.run.start, coWindow.end) !== 0 && (
-          <button type="button" className="small" onClick={() => setSpan('run', { ...st.run, start: { ...coWindow.end } })}>
-            Start at changeover end ({time12(coWindow.end.time)})
-          </button>
-        )}
-      </TimeCard>
-      <p className="muted small">Production starts when the changeover ends. It cannot start earlier.</p>
+      <TimeCard
+        title="Production Time"
+        span={st.run}
+        required
+        disabled={readOnly}
+        error={errorOf('run')}
+        downtime={runTimes.downtime}
+        auto={autoFor('run', required || spanComplete(st.colour_matching) ? 'Colour Matching end' : 'previous step end')}
+        onChange={(s) => setSpan('run', s)}
+      />
+      <p className="muted small">Production starts when Colour Matching ends (or when the machine was ready, if there is no changeover).</p>
     </div>,
 
-    // 6. Production Details
+    // 6. Downtime
+    <div key="downtime" className="form-stack">
+      <p className="notice info">
+        Record each breakdown (BDT) or other downtime (ODT) during this job: during or between the changeover steps, or during
+        production. Downtime between two jobs is recorded under Production → BDT / ODT instead.
+      </p>
+      {st.downtime.length === 0 && <p className="empty">No downtime recorded for this job.</p>}
+      {st.downtime.map((d, i) => {
+        const minutes = spanComplete(d.span) ? (stampMs(d.span.end)! - stampMs(d.span.start)!) / 60000 : null
+        const where = downtimePlacement(st, d)
+        const reasonRows = d.kind === 'BDT' ? bdtReasons : d.kind === 'ODT' ? odtReasons : []
+        const setRow = (patch: Partial<typeof d>) => update({ downtime: st.downtime.map((x, j) => (j === i ? { ...x, ...patch } : x)) })
+        return (
+          <div key={i} className="downtime-row">
+            <div className="downtime-head">
+              <b>Downtime {i + 1}</b>
+              {!readOnly && (
+                <button
+                  type="button"
+                  className="icon-button danger-text"
+                  aria-label={`Remove downtime ${i + 1}`}
+                  title="Remove"
+                  onClick={() => update({ downtime: st.downtime.filter((_, j) => j !== i) })}
+                >
+                  <Trash2 size={17} />
+                </button>
+              )}
+            </div>
+            <div className="form-grid">
+              <label className="field">
+                <span>Type *</span>
+                <select value={d.kind} disabled={readOnly} onChange={(e) => setRow({ kind: e.target.value as typeof d.kind, reason_id: '' })}>
+                  <option value="">Select…</option>
+                  <option value="BDT">BDT – Breakdown</option>
+                  <option value="ODT">ODT – Other downtime</option>
+                </select>
+              </label>
+              <label className="field">
+                <span>Reason *</span>
+                <select value={d.reason_id} disabled={readOnly || !d.kind} onChange={(e) => setRow({ reason_id: e.target.value })}>
+                  <option value="">{d.kind ? 'Select…' : 'Choose the type first'}</option>
+                  {choices(reasonRows, d.reason_id).map((r) => (
+                    <option key={r.id} value={r.id}>
+                      {r.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="field span-2">
+                <span>Remarks</span>
+                <input value={d.remarks} maxLength={500} disabled={readOnly} onChange={(e) => setRow({ remarks: e.target.value })} />
+              </label>
+            </div>
+            <TimeCard
+              title={d.kind ? `${d.kind} time` : 'Downtime time'}
+              span={d.span}
+              disabled={readOnly}
+              onChange={(span) => setRow({ span })}
+            >
+              {where && <p className="muted small">Inside: {where}</p>}
+              {minutes !== null && minutes > 0 && !where && (
+                <p className="warn-text small">This is outside the job's steps. Check the times.</p>
+              )}
+            </TimeCard>
+          </div>
+        )
+      })}
+      {!readOnly && (
+        <div className="actions">
+          <button type="button" className="small" onClick={() => update({ downtime: [...st.downtime, { ...emptyDowntime(), kind: 'BDT' }] })}>
+            <Plus size={15} /> Add BDT
+          </button>
+          <button type="button" className="small" onClick={() => update({ downtime: [...st.downtime, { ...emptyDowntime(), kind: 'ODT' }] })}>
+            <Plus size={15} /> Add ODT
+          </button>
+        </div>
+      )}
+      {errorOf('downtime') && <p className="field-error">{errorOf('downtime')}</p>}
+      <div className="totals">
+        <div>
+          <span>Changeover gross / net</span>
+          <b>
+            {formatDuration(totals.gross)} / {formatDuration(totals.net)}
+          </b>
+        </div>
+        <div>
+          <span>Production gross / net</span>
+          <b>
+            {formatDuration(runTimes.gross)} / {formatDuration(runTimes.net)}
+          </b>
+        </div>
+      </div>
+    </div>,
+
+    // 7. Production Details
     <div key="production" className="form-stack">
       <div className="form-grid">
         <Field label="Machine Speed (Sheets/Hour) *" error={errorOf('machine_speed')}>
@@ -768,7 +1000,7 @@ function EntryEditor({ entryId }: { entryId: string | null }) {
             {meta.status === 'draft' && <span className="badge amber">Draft</span>}
           </h1>
           <p className="muted">
-            {readOnly ? 'View only' : 'Fill in the six sections. Save Draft keeps your work; Save Entry submits it.'}
+            {readOnly ? 'View only' : 'Fill in the sections. Save Draft keeps your work; Save Entry submits it.'}
           </p>
         </div>
       </div>
@@ -928,6 +1160,24 @@ function EntryEditor({ entryId }: { entryId: string | null }) {
 }
 
 const digits = (v: string) => v.replace(/[^0-9]/g, '')
+
+// The colours the units can use: the plan's slot for the chosen print side (planned
+// orders), or the colours typed for an unplanned order. Unit choices that are no
+// longer valid are cleared; when no unit is allocated, units are filled in order.
+function sideColours(st: EntryState, status: OrderStatus | null, orderChanged: boolean): EntryState {
+  let colours: string[] | null = null
+  if (status?.job) colours = status.job.sides.find((x) => x.print_side === st.print_side)?.colours ?? []
+  else if (orderChanged) colours = status?.last_entry_job?.sides.find((x) => x.print_side === st.print_side)?.colours ?? []
+  const list = colours ?? cleanColours(st.planned_colours).colours
+  const keys = new Set(list.map((c) => c.toLowerCase()))
+  let units = st.unit_colours.map((u) => (u && keys.has(u.toLowerCase()) ? u : ''))
+  if (!units.some(Boolean) && list.length) units = Array.from({ length: UNIT_COUNT }, (_, i) => list[i] ?? '')
+  return {
+    ...st,
+    planned_colours: colours ? Array.from({ length: Math.max(7, colours.length) }, (_, i) => colours[i] ?? '') : st.planned_colours,
+    unit_colours: units,
+  }
+}
 const minutesOf = (s: Span) => {
   const a = Date.parse(`${s.start.date}T${s.start.time}:00+05:30`)
   const b = Date.parse(`${s.end.date}T${s.end.time}:00+05:30`)
@@ -956,5 +1206,44 @@ function MasterSelect({ rows, value, disabled, onChange }: { rows: Option[]; val
         </option>
       ))}
     </select>
+  )
+}
+
+function TimelinePanel({ timeline, machineCode, submitted }: { timeline: Timeline | null; machineCode?: string; submitted: boolean }) {
+  if (!machineCode) return <p className="notice info">Select the machine in Job Details to load its timeline.</p>
+  if (!timeline) return <p className="notice info">Loading the machine timeline…</p>
+  const prev = timeline.previous
+  return (
+    <div className="timeline-panel">
+      <p className="smallcaps">Machine timeline · {machineCode}</p>
+      {prev ? (
+        <p>
+          Previous completed job: <b>{entryLabel(prev.entry_no)}</b> · order {prev.order_no} {prev.print_side ? `(${prev.print_side})` : ''} ·
+          production ended <b>{formatMoment(prev.run_end)}</b>
+        </p>
+      ) : (
+        <p>
+          No earlier completed job on this machine. This entry starts its timeline: enter the Make Ready start yourself.
+        </p>
+      )}
+      {timeline.downtime.map((d) => (
+        <p key={d.id}>
+          {d.kind} between jobs: {formatMoment(d.start_at)} – {formatMoment(d.end_at)} ({formatDuration(d.minutes)}
+          {d.reason ? `, ${d.reason}` : ''})
+        </p>
+      ))}
+      {timeline.ready_at && (
+        <p>
+          Machine ready from <b>{formatMoment(timeline.ready_at)}</b>
+          {submitted ? '' : ' → used as the Make Ready start'}
+        </p>
+      )}
+      {timeline.open_downtime.map((d) => (
+        <p key={d.id} className="warn-text">
+          Open {d.kind} since {formatMoment(d.start_at)}: the machine is still recorded as down. Close it under Production →{' '}
+          {d.kind === 'BDT' ? 'BDT' : 'ODT'}.
+        </p>
+      ))}
+    </div>
   )
 }

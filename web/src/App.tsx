@@ -12,6 +12,7 @@ import { MasterPage } from './pages/MasterPage'
 import { JobsPage } from './pages/JobsPage'
 import { ProductionEntriesPage } from './pages/ProductionEntriesPage'
 import { ProductionEntryPage } from './pages/ProductionEntryPage'
+import { DowntimePage } from './pages/DowntimePage'
 import { ToastProvider } from './components/Toast'
 import { MASTERS } from './lib/masters'
 
@@ -20,6 +21,8 @@ const BUILT: Record<string, ComponentType> = {
   '/dashboard': DashboardPage,
   '/plan/jobs': JobsPage,
   '/production/entry': ProductionEntriesPage,
+  '/production/bdt': DowntimePage,
+  '/production/odt': DowntimePage,
   ...Object.fromEntries(MASTERS.map((m) => [`/masters/${m.slug}`, MasterPage])),
 }
 

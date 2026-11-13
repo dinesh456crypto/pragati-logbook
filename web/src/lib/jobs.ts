@@ -1,7 +1,8 @@
 // Production Plan: planned jobs (Job Details).
 export const JOB_TYPES = ['NPD', 'NEW', 'Re-Print'] as const
 export type JobType = (typeof JOB_TYPES)[number]
-export const MAX_COLOURS = 9
+export const PLAN_SIDES = ['O/S', 'F/S', 'B/S', 'B/B F', 'B/B B'] as const
+export const SLOT_START_COLOURS = 7 // colour boxes a new print-side slot starts with
 
 export interface Job {
   id: string
@@ -13,19 +14,19 @@ export interface Job {
   job_type: JobType
   paper_type_id: string
   quantity: number
-  colours: string[]
+  production_job_sides: { print_side: string; colours: string[]; line: number }[]
   created_at: string
   updated_at: string
   paper_types: { name: string } | null
 }
 
 export const JOB_COLUMNS =
-  'id, plan_date, order_no, job_name, category, ups, job_type, paper_type_id, quantity, colours, created_at, updated_at, paper_types(name)'
+  'id, plan_date, order_no, job_name, category, ups, job_type, paper_type_id, quantity, created_at, updated_at, paper_types(name), production_job_sides(print_side, colours, line)'
 
 // Tidies one typed value: trims and collapses repeated spaces.
 export const tidy = (value: string) => value.trim().replace(/\s+/g, ' ')
 
-// Turns the nine colour boxes into the saved list: empty boxes are skipped and a
+// Turns colour boxes into the saved list: empty boxes are skipped and a
 // colour entered twice (ignoring case) is kept once. Also reports the repeats.
 export function cleanColours(boxes: string[]): { colours: string[]; repeated: string[] } {
   const colours: string[] = []
@@ -44,6 +45,11 @@ export function cleanColours(boxes: string[]): { colours: string[]; repeated: st
   }
   return { colours, repeated }
 }
+
+// Print sides that may be planned together: O/S alone, F/S + B/S, B/B F + B/B B.
+export const sideGroup = (side: string) => (side === 'O/S' ? 'OS' : side === 'F/S' || side === 'B/S' ? 'FB' : side ? 'BB' : '')
+
+export const sortedSides = (job: Job) => [...(job.production_job_sides ?? [])].sort((a, b) => a.line - b.line)
 
 // 2026-11-13 → 13-Nov-2026
 export function formatDate(date: string | null | undefined): string {

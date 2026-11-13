@@ -20,8 +20,19 @@ export const SECTIONS = [
   'Unit-wise Colour Allocation',
   'Changeover Time',
   'Run Time',
+  'Downtime (BDT / ODT)',
   'Production Details',
 ] as const
+
+// Changeover and production steps, in the order they happen on the machine.
+export const STEPS = ['make_ready', 'registration', 'colour_matching', 'run'] as const
+export type StepKey = (typeof STEPS)[number]
+export const STEP_LABEL: Record<StepKey, string> = {
+  make_ready: 'Make Ready',
+  registration: 'Registration',
+  colour_matching: 'Colour Matching',
+  run: 'Production',
+}
 
 // Which section shows each field (used to point at errors).
 const FIELD_SECTION: Record<string, number> = {
@@ -31,7 +42,8 @@ const FIELD_SECTION: Record<string, number> = {
   planned_colours: 2, unit_colours: 2, coating_id: 2, colour_changes: 2, coating_changed: 2,
   make_ready: 3, registration: 3, colour_matching: 3,
   run: 4,
-  machine_speed: 5, total_sheets: 5, ok_sheets: 5, separate_sheets: 5, wastage: 5, remarks: 5,
+  downtime: 5,
+  machine_speed: 6, total_sheets: 6, ok_sheets: 6, separate_sheets: 6, wastage: 6, remarks: 6,
 }
 export const sectionOf = (field: string | null | undefined) => (field ? (FIELD_SECTION[field] ?? 0) : 0)
 
@@ -57,6 +69,14 @@ export interface WastageRow {
   reason_id: string
 }
 
+export interface DowntimeRow {
+  kind: '' | 'BDT' | 'ODT'
+  reason_id: string
+  span: Span
+  remarks: string
+}
+export const emptyDowntime = (): DowntimeRow => ({ kind: '', reason_id: '', span: emptySpan(), remarks: '' })
+
 export interface EntryState {
   production_date: string
   machine_id: string
@@ -74,7 +94,7 @@ export interface EntryState {
   supervisor_id: string
   qc_executive_id: string
   helpers: string
-  planned_colours: string[] // nine boxes
+  planned_colours: string[] // the job's colours for the chosen print side
   unit_colours: string[] // seven units
   coating_id: string
   colour_changes: string
@@ -88,6 +108,8 @@ export interface EntryState {
   ok_sheets: string
   separate_sheets: string
   wastage: WastageRow[]
+  downtime: DowntimeRow[]
+  manual_starts: StepKey[] // start times typed by hand (not following the previous step)
   remarks: string
 }
 
@@ -121,7 +143,7 @@ export function newEntryState(): EntryState {
     supervisor_id: '',
     qc_executive_id: '',
     helpers: '',
-    planned_colours: Array(9).fill(''),
+    planned_colours: Array(7).fill(''),
     unit_colours: Array(UNIT_COUNT).fill(''),
     coating_id: '',
     colour_changes: '',
@@ -135,6 +157,8 @@ export function newEntryState(): EntryState {
     ok_sheets: '',
     separate_sheets: '',
     wastage: [{ quantity: '', reason_id: '' }],
+    downtime: [],
+    manual_starts: [],
     remarks: '',
   }
 }
@@ -165,10 +189,11 @@ export function stampToIso(s: Stamp): string | null {
 export function isoToStamp(iso: string | null | undefined): Stamp {
   return iso ? plantStamp(new Date(iso)) : emptyStamp()
 }
-const ms = (s: Stamp) => {
+export const stampMs = (s: Stamp) => {
   const iso = stampToIso(s)
   return iso ? Date.parse(iso) : null
 }
+const ms = stampMs
 
 export const stampFilled = (s: Stamp) => Boolean(s.date && s.time)
 export const stampPartial = (s: Stamp) => Boolean(s.date) !== Boolean(s.time)
@@ -186,13 +211,91 @@ export function compareStamps(a: Stamp, b: Stamp): number {
   return (ms(a) ?? 0) - (ms(b) ?? 0)
 }
 
-// Machine changeover: earliest complete activity start to latest end.
-export function changeoverWindow(st: EntryState): { start: Stamp; end: Stamp; minutes: number } | null {
-  const done = ACTIVITIES.map((a) => st[a.key]).filter(spanComplete)
-  if (!done.length) return null
-  const start = done.map((s) => s.start).reduce((x, y) => (compareStamps(y, x) < 0 ? y : x))
-  const end = done.map((s) => s.end).reduce((x, y) => (compareStamps(y, x) > 0 ? y : x))
-  return { start, end, minutes: spanMinutes({ start, end }) ?? 0 }
+// ---- Sequential steps and automatic start times -----------------------------------
+
+// Each step starts when the one before it ended; the first starts when the machine
+// became ready. Changeover steps that are not in use are skipped. Starts typed by
+// hand are kept.
+export function applyAutoStarts(st: EntryState, readyAt: Stamp | null, changeoverInUse: boolean): EntryState {
+  let chain: Stamp | null = readyAt && stampFilled(readyAt) ? readyAt : null
+  let next = st
+  for (const key of STEPS) {
+    const span = next[key]
+    const inUse = key === 'run' || changeoverInUse || stampFilled(span.end) || stampFilled(span.start)
+    if (inUse && !next.manual_starts.includes(key) && chain) {
+      if (span.start.date !== chain.date || span.start.time !== chain.time) {
+        next = { ...next, [key]: { ...span, start: { ...chain } } }
+      }
+    }
+    const cur = next[key]
+    if (stampFilled(cur.end)) chain = cur.end
+    else if (stampFilled(cur.start) && key !== 'run') chain = null // step still running: the next one waits
+  }
+  return next
+}
+
+// The automatic start of a step (what applyAutoStarts would use), for "reset" buttons.
+export function autoStartOf(st: EntryState, key: StepKey, readyAt: Stamp | null): Stamp | null {
+  let chain: Stamp | null = readyAt && stampFilled(readyAt) ? readyAt : null
+  for (const k of STEPS) {
+    if (k === key) return chain
+    const span = st[k]
+    if (stampFilled(span.end)) chain = span.end
+  }
+  return null
+}
+
+// ---- Downtime overlap (merged, so a minute is never counted twice) -----------------
+
+type Interval = [number, number]
+function mergedDowntime(rows: DowntimeRow[]): Interval[] {
+  const list = rows
+    .map((r) => [stampMs(r.span.start), stampMs(r.span.end)] as const)
+    .filter((x): x is [number, number] => x[0] !== null && x[1] !== null && x[1] > x[0])
+    .sort((a, b) => a[0] - b[0])
+  const out: Interval[] = []
+  for (const [a, b] of list) {
+    const last = out[out.length - 1]
+    if (last && a <= last[1]) last[1] = Math.max(last[1], b)
+    else out.push([a, b])
+  }
+  return out
+}
+
+export function overlapMinutes(rows: DowntimeRow[], span: Span): number {
+  const a = stampMs(span.start)
+  const b = stampMs(span.end)
+  if (a === null || b === null || b <= a) return 0
+  const ms = mergedDowntime(rows).reduce((sum, [x, y]) => sum + Math.max(0, Math.min(b, y) - Math.max(a, x)), 0)
+  return ms / 60000
+}
+
+export interface StepTimes {
+  gross: number | null
+  net: number | null
+  downtime: number
+}
+export function stepTimes(st: EntryState, key: StepKey): StepTimes {
+  const span = st[key]
+  const gross = spanMinutes(span)
+  if (gross === null || gross < 0) return { gross: null, net: null, downtime: 0 }
+  const down = overlapMinutes(st.downtime, span)
+  return { gross, net: Math.round(gross - down), downtime: Math.round(down) }
+}
+
+export function changeoverTotals(st: EntryState): { gross: number | null; net: number | null } {
+  const parts = ACTIVITIES.map((a) => stepTimes(st, a.key))
+  if (parts.every((p) => p.gross === null)) return { gross: null, net: null }
+  return {
+    gross: parts.reduce((s, p) => s + (p.gross ?? 0), 0),
+    net: parts.reduce((s, p) => s + (p.net ?? 0), 0),
+  }
+}
+
+// Which steps a downtime row falls in, e.g. "Make Ready 15 min · Registration 5 min".
+export function downtimePlacement(st: EntryState, row: DowntimeRow): string {
+  const parts = STEPS.map((k) => ({ k, m: Math.round(overlapMinutes([row], st[k])) })).filter((x) => x.m > 0)
+  return parts.map((x) => `${STEP_LABEL[x.k]} ${x.m} min`).join(' · ')
 }
 
 // 14:05 → 2:05 PM
@@ -237,6 +340,15 @@ export function wastageTotal(rows: WastageRow[]): number {
 // ---- Converting to and from the database ---------------------------------------
 
 export function toPayload(st: EntryState) {
+  const downtime = st.downtime
+    .filter((d) => d.kind || d.reason_id || spanTouched(d.span) || d.remarks.trim())
+    .map((d) => ({
+      kind: d.kind || null,
+      reason_id: d.reason_id || null,
+      start_at: stampToIso(d.span.start),
+      end_at: stampToIso(d.span.end),
+      remarks: d.remarks,
+    }))
   const entry = {
     production_date: st.production_date,
     machine_id: st.machine_id,
@@ -272,11 +384,12 @@ export function toPayload(st: EntryState) {
     ok_sheets: int(st.ok_sheets),
     separate_sheets: int(st.separate_sheets),
     remarks: st.remarks,
+    manual_starts: st.manual_starts,
   }
   const wastage = st.wastage
     .filter((w) => w.quantity.trim() || w.reason_id)
     .map((w) => ({ quantity: int(w.quantity), reason_id: w.reason_id || null }))
-  return { entry, wastage }
+  return { entry, wastage, downtime }
 }
 
 export interface EntryRow {
@@ -315,8 +428,14 @@ export interface EntryRow {
   colour_matching_end: string | null
   run_start: string | null
   run_end: string | null
-  changeover_minutes: number | null
+  changeover_gross_minutes: number | null
+  changeover_net_minutes: number | null
   run_minutes: number | null
+  run_net_minutes: number | null
+  downtime_minutes: number
+  manual_starts: string[]
+  previous_entry_id: string | null
+  machine_ready_at: string | null
   machine_speed: number | null
   total_sheets: number | null
   ok_sheets: number | null
@@ -332,7 +451,20 @@ export interface EntryRow {
 const str = (v: number | string | null | undefined) => (v == null ? '' : String(v))
 const span = (a: string | null, b: string | null): Span => ({ start: isoToStamp(a), end: isoToStamp(b) })
 
-export function fromRow(r: EntryRow, wastage: { quantity: number | null; reason_id: string | null }[]): EntryState {
+export interface DowntimeDbRow {
+  kind: 'BDT' | 'ODT'
+  start_at: string | null
+  end_at: string | null
+  bdt_reason_id: string | null
+  odt_reason_id: string | null
+  remarks: string | null
+}
+
+export function fromRow(
+  r: EntryRow,
+  wastage: { quantity: number | null; reason_id: string | null }[],
+  downtime: DowntimeDbRow[] = [],
+): EntryState {
   const colours = [...(r.planned_colours ?? [])]
   return {
     production_date: r.production_date,
@@ -351,7 +483,7 @@ export function fromRow(r: EntryRow, wastage: { quantity: number | null; reason_
     supervisor_id: str(r.supervisor_id),
     qc_executive_id: str(r.qc_executive_id),
     helpers: str(r.helpers),
-    planned_colours: Array.from({ length: 9 }, (_, i) => colours[i] ?? ''),
+    planned_colours: Array.from({ length: Math.max(7, colours.length) }, (_, i) => colours[i] ?? ''),
     unit_colours: Array.from({ length: UNIT_COUNT }, (_, i) => r.unit_colours?.[i] ?? ''),
     coating_id: str(r.coating_id),
     colour_changes: str(r.colour_changes),
@@ -367,11 +499,22 @@ export function fromRow(r: EntryRow, wastage: { quantity: number | null; reason_
     wastage: wastage.length
       ? wastage.map((w) => ({ quantity: str(w.quantity), reason_id: str(w.reason_id) }))
       : [{ quantity: '', reason_id: '' }],
+    downtime: downtime.map((d) => ({
+      kind: d.kind,
+      reason_id: str(d.kind === 'BDT' ? d.bdt_reason_id : d.odt_reason_id),
+      span: span(d.start_at, d.end_at),
+      remarks: str(d.remarks),
+    })),
+    manual_starts: (r.manual_starts ?? []).filter((k): k is StepKey => (STEPS as readonly string[]).includes(k)),
     remarks: str(r.remarks),
   }
 }
 
 // What the server tells the form about an order on a machine.
+export interface SideColours {
+  print_side: string
+  colours: string[]
+}
 export interface OrderJob {
   id?: string
   order_no: string
@@ -381,7 +524,7 @@ export interface OrderJob {
   job_type: string | null
   paper_type_id: string | null
   quantity: number | null
-  colours: string[]
+  sides: SideColours[]
 }
 export interface SideStatus {
   side: string
@@ -406,7 +549,13 @@ export interface OrderStatus {
     shift: string | null
     run_end: string | null
   } | null
-  machine_free_since?: string | null
+}
+
+export interface Timeline {
+  previous: { id: string; entry_no: number; order_no: string | null; job_name: string | null; print_side: string | null; run_end: string } | null
+  downtime: { id: string; kind: 'BDT' | 'ODT'; start_at: string; end_at: string; minutes: number; reason: string | null }[]
+  open_downtime: { id: string; kind: 'BDT' | 'ODT'; start_at: string }[]
+  ready_at: string | null
 }
 
 export interface OrderOption {
