@@ -815,3 +815,111 @@ td.wrap {
 table.compact {
   min-width: 0;
 }
+
+/* ---------- Job Details ---------- */
+.notice.warn {
+  background: #fff7e6;
+  color: #7a5200;
+  margin: 10px 0 0;
+}
+
+td.num {
+  text-align: right;
+}
+
+.inline-field {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #43576a;
+}
+
+.inline-field input {
+  min-height: 44px;
+  padding: 9px 11px;
+  border: 1px solid #cbd6df;
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+}
+
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.form-grid .span-2 {
+  grid-column: span 2;
+}
+
+.colour-set {
+  margin: 0;
+  padding: 12px 14px 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+.colour-set legend {
+  padding: 0 6px;
+  font-weight: 700;
+  font-size: 13px;
+  color: var(--navy);
+}
+
+.colour-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px 14px;
+}
+
+.field.dup input {
+  border-color: #d99a00;
+  background: #fffaf0;
+}
+
+.recent-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.recent-list li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.recent-list li:last-child {
+  border-bottom: 0;
+}
+
+.recent-list .sub {
+  display: block;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+@media (max-width: 760px) {
+  .form-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 600px) {
+  .colour-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .inline-field {
+    flex: 1 1 140px;
+  }
+  .inline-field input {
+    flex: 1;
+    min-width: 0;
+  }
+}

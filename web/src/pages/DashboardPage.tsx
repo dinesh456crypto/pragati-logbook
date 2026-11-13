@@ -5,6 +5,15 @@ import { supabase } from '../lib/supabase'
 import { useAuth } from '../lib/auth'
 import { addDays, plantDate } from '../lib/dates'
 import type { Machine } from '../lib/types'
+import { formatDate, formatNumber } from '../lib/jobs'
+
+interface RecentJob {
+  id: string
+  plan_date: string
+  order_no: string
+  job_name: string
+  quantity: number
+}
 
 // Dashboard layout with working filters. Figures are filled in as Production Plan
 // (phase 3), Production Entry (phase 4) and BDT/ODT (phase 5) come online.
@@ -28,6 +37,9 @@ export function DashboardPage() {
   const [machine, setMachine] = useState('ALL')
   const [from, setFrom] = useState(addDays(today, -30))
   const [to, setTo] = useState(today)
+  const [plannedCount, setPlannedCount] = useState<number | null>(null)
+  const [recentJobs, setRecentJobs] = useState<RecentJob[]>([])
+  const canSeeJobs = can('production_plan', 'view')
 
   useEffect(() => {
     supabase
@@ -43,6 +55,37 @@ export function DashboardPage() {
   }, [])
 
   const rangeError = from && to && from > to ? 'From Date cannot be after To Date.' : ''
+
+  // Planned jobs in the date range (by plan date). Planned jobs are not tied to a machine.
+  useEffect(() => {
+    if (rangeError || !canSeeJobs) return
+    let alive = true
+    const inRange = <T extends { gte: (c: string, v: string) => T; lte: (c: string, v: string) => T }>(q: T) => {
+      let r = q
+      if (from) r = r.gte('plan_date', from)
+      if (to) r = r.lte('plan_date', to)
+      return r
+    }
+    Promise.all([
+      inRange(supabase.from('production_jobs').select('id', { count: 'exact', head: true })),
+      inRange(
+        supabase
+          .from('production_jobs')
+          .select('id, plan_date, order_no, job_name, quantity')
+          .order('plan_date', { ascending: false })
+          .order('created_at', { ascending: false })
+          .limit(5),
+      ),
+    ]).then(([counted, recent]) => {
+      if (!alive) return
+      setPlannedCount(counted.error ? null : (counted.count ?? 0))
+      setRecentJobs(recent.error ? [] : ((recent.data ?? []) as RecentJob[]))
+      if (counted.error || recent.error) setLoadError((counted.error ?? recent.error)?.message ?? '')
+    })
+    return () => {
+      alive = false
+    }
+  }, [from, to, rangeError, canSeeJobs])
   const shownMachines = useMemo(
     () => (machine === 'ALL' ? machines : machines.filter((m) => m.id === machine)),
     [machine, machines],
@@ -68,7 +111,7 @@ export function DashboardPage() {
             </Link>
           )}
           {can('production_plan', 'create') && (
-            <Link to="/plan/jobs" className="button teal">
+            <Link to="/plan/jobs?new=1" className="button teal">
               <Plus size={18} /> New Job
             </Link>
           )}
@@ -103,15 +146,16 @@ export function DashboardPage() {
       </section>
 
       <p className="notice info">
-        Figures appear here once Production Plan (phase 3) and Production Entry (phase 4) are in use.
-        Drafts are never counted.
+        Production figures appear here once Production Entry (phase 4) is in use. Drafts are never counted.
       </p>
 
       <div className="metric-grid">
         {METRICS.map((m) => (
           <div key={m.label} className="card metric">
             <span className="metric-label">{m.label}</span>
-            <strong className="metric-value">—</strong>
+            <strong className="metric-value">
+              {m.label === 'Total Planned Jobs' && plannedCount !== null && !rangeError ? formatNumber(plannedCount) : '—'}
+            </strong>
             <span className="metric-hint">{m.hint}</span>
           </div>
         ))}
@@ -160,7 +204,31 @@ export function DashboardPage() {
         </section>
         <section className="card">
           <h2>Recently Planned Jobs</h2>
-          <p className="empty">No planned jobs yet.</p>
+          {!canSeeJobs ? (
+            <p className="empty">You do not have access to Production Plan.</p>
+          ) : recentJobs.length === 0 ? (
+            <p className="empty">No jobs planned in this date range.</p>
+          ) : (
+            <ul className="recent-list">
+              {recentJobs.map((j) => (
+                <li key={j.id}>
+                  <span>
+                    <b>{j.order_no}</b>
+                    <span className="sub">{j.job_name}</span>
+                  </span>
+                  <span className="muted small" style={{ textAlign: 'right' }}>
+                    {formatDate(j.plan_date)}
+                    <span className="sub">{formatNumber(j.quantity)} sheets</span>
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+          {canSeeJobs && (
+            <Link to="/plan/jobs" className="small">
+              View all jobs →
+            </Link>
+          )}
         </section>
       </div>
     </>

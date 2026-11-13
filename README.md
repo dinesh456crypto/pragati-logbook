@@ -123,6 +123,11 @@ Database rule tests (from a folder with `@electric-sql/pglite` installed):
 node supabase/tests/permissions.test.mjs \
   supabase/migrations/20261112120000_foundation.sql \
   supabase/migrations/20261113120000_phase1_permissions_masters.sql
+
+node supabase/tests/production_plan.test.mjs \
+  supabase/migrations/20261112120000_foundation.sql \
+  supabase/migrations/20261113120000_phase1_permissions_masters.sql \
+  supabase/migrations/20261113150000_phase3_production_plan.sql
 ```
 
 ## Importing data from the old Google Sheets system

@@ -9,12 +9,14 @@ import { ChangePasswordPage } from './pages/ChangePasswordPage'
 import { DashboardPage } from './pages/DashboardPage'
 import { ComingSoonPage } from './pages/ComingSoonPage'
 import { MasterPage } from './pages/MasterPage'
+import { JobsPage } from './pages/JobsPage'
 import { ToastProvider } from './components/Toast'
 import { MASTERS } from './lib/masters'
 
 // Screens built so far; every other menu entry shows its planned phase.
 const BUILT: Record<string, ComponentType> = {
   '/dashboard': DashboardPage,
+  '/plan/jobs': JobsPage,
   ...Object.fromEntries(MASTERS.map((m) => [`/masters/${m.slug}`, MasterPage])),
 }
 
