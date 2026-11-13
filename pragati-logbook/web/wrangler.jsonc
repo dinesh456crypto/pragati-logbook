@@ -2,7 +2,7 @@
 // static assets). Serves the built React app and sends unknown paths to
 // index.html so client-side routes like /jobs work on refresh.
 {
-  "name": "logbook",
+  "name": "pragati-logbook",
   "compatibility_date": "2026-11-01",
   "assets": {
     "directory": "./dist",
