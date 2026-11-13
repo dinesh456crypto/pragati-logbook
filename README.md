@@ -7,23 +7,27 @@ Shift production logbook for Pragati Offset's printing machines.
 | Front-end (`web/`) | React + Vite + TypeScript | Cloudflare (Workers & Pages) |
 | Database, login, API (`supabase/`) | Supabase: Postgres, Auth, Row Level Security, Edge Functions | Supabase (South Asia – Mumbai) |
 
-This repository currently contains the **foundation**: sign-in, roles, machine access and master lists.
-Production entry, finished jobs and downtime screens are added in the next phase.
+Built in phases (per the Pragati Offset FSD). **Done:** phase 1 – sign-in, Super Admin, per-user
+permission matrix, machine access, ten master tables, audit trail, sidebar layout and dashboard shell.
+Later phases add master screens, Production Plan, Production Entry, BDT/ODT, reports, user screens
+and ink formulas.
 
 ## Repository layout
 
 ```
 web/                         React app
   src/lib/supabase.ts        Supabase client (publishable key only)
-  src/lib/auth.tsx           Sign-in, sign-out, password change, current profile
+  src/lib/auth.tsx           Sign-in, sign-out, password change, profile + permissions
+  src/lib/nav.ts             Sidebar modules/submodules and the permission each needs
   src/lib/username.ts        Username → internal login email mapping
-  src/components/            Layout, route guards
+  src/components/            App shell, sidebar, route/permission guards
   src/pages/                 Screens
   wrangler.jsonc             Cloudflare deploy config
 supabase/
   config.toml                Local Supabase settings (sign-up disabled, 12-char passwords)
   migrations/                Database schema, RLS policies and RPCs, applied in order
-  functions/admin-users/     Admin-only user creation and password resets
+  functions/admin-users/     User creation, edits, disabling and password resets
+  tests/                     Database rule tests (run on embedded Postgres)
 .github/workflows/           Manual "Deploy Supabase" workflow
 ```
 
@@ -31,10 +35,16 @@ supabase/
 
 - Operators sign in with a **username**. Supabase Auth is email-based, so `ravi` signs in as
   `ravi@pragati.internal` behind the scenes. That address never receives mail.
-- Roles: **admin** (everything, all machines) and **operator** (only machines assigned to them).
+- **Super Admin** (exactly one) has every permission. Other users have a role label
+  (Manager, Supervisor, Operator, Office User) plus a **permission matrix**: View / Create / Edit /
+  Delete per screen (`permission_resources`). Create, Edit and Delete always require View.
+- Machine access: all machines, or a chosen list.
+- Master lists live in ten separate tables. Created/updated by and at are set by the database,
+  and changes to users, permissions and masters are written to `audit_logs` (Super Admin only).
 - Every table has Row Level Security. The browser only holds the publishable key, so the
   database itself decides what each user can read or change.
-- New users are created by an admin through the `admin-users` Edge Function. The service-role key
+- New users are created through the `admin-users` Edge Function (needs the Users permission;
+  only the Super Admin can change permissions). The service-role key
   stays on the server. New and reset passwords are temporary and must be changed at next sign-in.
 - Disabling a user bans them in Auth and removes their data access immediately.
 
@@ -68,13 +78,14 @@ secrets listed at the top of `.github/workflows/supabase-deploy.yml`.
 2. **SQL Editor**, run:
 
 ```sql
-insert into public.profiles (id, username, full_name, role, must_change_password)
-select id, 'dinesh', 'Dinesh Kumar P', 'admin', false
+insert into public.profiles (id, username, full_name, role, all_machines, must_change_password)
+select id, 'dinesh', 'Dinesh Kumar P', 'super_admin', true, false
 from auth.users
 where email = 'dinesh@pragati.internal';
 
 -- Starting machines (edit to match the plant)
-insert into public.machines (code, sort_order) values ('K729', 1), ('K629', 2), ('KBA105', 3);
+insert into public.machines (code, name, sort_order)
+values ('K729', 'K729', 1), ('K629', 'K629', 2), ('KBA105', 'KBA105', 3);
 ```
 
 Every later user is created from the app's **Users** screen.
@@ -92,7 +103,7 @@ Cloudflare dashboard → **Workers & Pages → Create** → import the GitHub re
 | Deploy command (Workers) | `npx wrangler deploy` |
 | Environment variables | `VITE_SUPABASE_URL`, `VITE_SUPABASE_PUBLISHABLE_KEY` |
 
-Then add the Cloudflare URL (e.g. `https://pragati-logbook.<account>.workers.dev`) in Supabase under
+Then add the Cloudflare URL (`https://logbook.pragati-offset.workers.dev`) in Supabase under
 **Authentication → URL Configuration → Site URL**.
 
 ## Local development
@@ -104,6 +115,14 @@ npm install
 npm run dev                  # http://localhost:5173
 npm run build                # type-check and production build
 npm run lint
+```
+
+Database rule tests (from a folder with `@electric-sql/pglite` installed):
+
+```bash
+node supabase/tests/permissions.test.mjs \
+  supabase/migrations/20261112120000_foundation.sql \
+  supabase/migrations/20261113120000_phase1_permissions_masters.sql
 ```
 
 ## Importing data from the old Google Sheets system
