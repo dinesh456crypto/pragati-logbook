@@ -7,7 +7,7 @@ import { friendlyError } from '../lib/errors'
 import { formatDate } from '../lib/jobs'
 import { formatMoment } from '../lib/production'
 import type { OrderOption } from '../lib/production'
-import { RECORD_COLUMNS, formulaLabel, sideText } from '../lib/ink'
+import { RECORD_COLUMNS, formulaLabel, isStandardColour, sideText } from '../lib/ink'
 import type { InkColour, InkRecord } from '../lib/ink'
 import { OrderPicker } from '../components/OrderPicker'
 import { useToast } from '../components/Toast'
@@ -18,6 +18,7 @@ interface PlanJob {
   job_name: string
   category: string | null
   plan_date: string
+  paper_type: string | null
 }
 
 interface Row {
@@ -51,6 +52,8 @@ function InkEditor({ recordId, startOrder }: { recordId: string | null; startOrd
   const [job, setJob] = useState<PlanJob | null>(null)
   const [record, setRecord] = useState<InkRecord | null>(null)
   const [rows, setRows] = useState<Row[]>([])
+  // C, M, Y, K of the order: shown for information, no formula needed.
+  const [standard, setStandard] = useState<string[]>([])
   const [note, setNote] = useState('')
   const [errors, setErrors] = useState<string[]>([])
   const [loading, setLoading] = useState(false)
@@ -61,10 +64,18 @@ function InkEditor({ recordId, startOrder }: { recordId: string | null; startOrd
 
   useEffect(() => {
     Promise.all([
-      supabase.from('production_jobs').select('id, order_no, job_name, category, plan_date').order('plan_date', { ascending: false }),
+      supabase
+        .from('production_jobs')
+        .select('id, order_no, job_name, category, plan_date, paper_types(name)')
+        .order('plan_date', { ascending: false }),
       supabase.from('ink_formula_records').select('id, record_no, order_key').eq('archived', false),
     ]).then(([j, r]) => {
-      setJobs((j.data ?? []) as PlanJob[])
+      setJobs(
+        ((j.data ?? []) as unknown as (Omit<PlanJob, 'paper_type'> & { paper_types: { name: string } | null })[]).map((x) => ({
+          ...x,
+          paper_type: x.paper_types?.name ?? null,
+        })),
+      )
       setLive(new Map(((r.data ?? []) as { id: string; record_no: number; order_key: string }[]).map((x) => [x.order_key, x])))
     })
   }, [])
@@ -102,17 +113,28 @@ function InkEditor({ recordId, startOrder }: { recordId: string | null; startOrd
       const rec = r.data as InkRecord
       const saved = (c.data ?? []) as InkColour[]
       let plan: { colour: string; sides: string[] }[] = []
+      let std: string[] = []
       if (rec.job_id) {
         const p = await supabase.rpc('order_plan_colours', { p_job_id: rec.job_id })
-        plan = (p.data ?? []) as { colour: string; sides: string[] }[]
+        const all = (p.data ?? []) as { colour: string; sides: string[] }[]
+        plan = all.filter((x) => !isStandardColour(x.colour))
+        std = all.filter((x) => isStandardColour(x.colour)).map((x) => x.colour)
       }
       const planKeys = new Set(plan.map((x) => x.colour.toLowerCase()))
       const savedKeys = new Set(saved.map((x) => x.colour.toLowerCase()))
       setRecord(rec)
       setOrderNo(rec.order_no)
-      setJob({ id: rec.job_id ?? '', order_no: rec.order_no, job_name: rec.job_name ?? '', category: rec.category, plan_date: rec.plan_date ?? '' })
+      setJob({
+        id: rec.job_id ?? '',
+        order_no: rec.order_no,
+        job_name: rec.job_name ?? '',
+        category: rec.category,
+        plan_date: rec.plan_date ?? '',
+        paper_type: rec.paper_type,
+      })
+      setStandard(std)
       setRows([
-        ...saved.map((x) => ({
+        ...saved.filter((x) => !isStandardColour(x.colour)).map((x) => ({
           colour: x.colour,
           sides: x.sides,
           formula: x.formula ?? '',
@@ -135,6 +157,7 @@ function InkEditor({ recordId, startOrder }: { recordId: string | null; startOrd
     if (!j) {
       setJob(null)
       setRows([])
+      setStandard([])
       setRecord(null)
       return
     }
@@ -147,9 +170,11 @@ function InkEditor({ recordId, startOrder }: { recordId: string | null; startOrd
     const { data, error } = await supabase.rpc('order_plan_colours', { p_job_id: j.id })
     setLoading(false)
     if (error) return notify('error', friendlyError(error))
+    const all = (data ?? []) as { colour: string; sides: string[] }[]
     setJob(j)
     setRecord(null)
-    setRows(((data ?? []) as { colour: string; sides: string[] }[]).map((x) => ({ ...x, formula: '', status: 'plan' })))
+    setStandard(all.filter((x) => isStandardColour(x.colour)).map((x) => x.colour))
+    setRows(all.filter((x) => !isStandardColour(x.colour)).map((x) => ({ ...x, formula: '', status: 'plan' })))
     setDirty(false)
   }
 
@@ -245,6 +270,10 @@ function InkEditor({ recordId, startOrder }: { recordId: string | null; startOrd
             <span>Planned Date</span>
             <p className="field-value">{job?.plan_date ? formatDate(job.plan_date) : '—'}</p>
           </div>
+          <div className="field">
+            <span>Type of Paper</span>
+            <p className="field-value">{job?.paper_type || '—'}</p>
+          </div>
         </div>
         {record?.archived && <p className="notice warn">This record is archived. Restore it from the Job Summary to edit it.</p>}
       </section>
@@ -254,8 +283,17 @@ function InkEditor({ recordId, startOrder }: { recordId: string | null; startOrd
       {job && !loading && (
         <section className="card">
           <h2>Ink formula for each colour</h2>
+          {standard.length > 0 && (
+            <p className="notice info">
+              Standard process colours <b>{standard.join(', ')}</b> need no formula, so they are not listed here.
+            </p>
+          )}
           {rows.length === 0 ? (
-            <p className="notice warn">This order has no colours in Production Plan. Add its colours under Job Details first.</p>
+            <p className="notice warn">
+              {standard.length
+                ? 'This order uses only the standard colours C, M, Y, K, so it needs no ink formula.'
+                : 'This order has no colours in Production Plan. Add its colours under Job Details first.'}
+            </p>
           ) : (
             <div className="ink-rows">
               {rows.map((r, i) => (

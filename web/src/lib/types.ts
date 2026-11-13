@@ -19,6 +19,7 @@ export type Resource =
   | 'masters'
   | 'users'
   | 'ink_formula'
+  | 'wastage'
 
 export type Action = 'view' | 'create' | 'edit' | 'delete'
 

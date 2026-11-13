@@ -69,7 +69,7 @@ export function InkFormulaPage() {
       await downloadPdf(
         `${formulaLabel(record.record_no)} ${record.order_no}`.replace(/[^\w .-]/g, ''),
         `Ink Formula ${formulaLabel(record.record_no)} · Order ${record.order_no}`,
-        `${record.job_name ?? ''} · ${record.category ?? ''} · Plan date ${formatDate(record.plan_date)} · Revision ${record.revision} · ${formatMoment(record.updated_at)}`,
+        `${record.job_name ?? ''} · ${record.category ?? ''} · Paper ${record.paper_type ?? '—'} · Plan date ${formatDate(record.plan_date)} · Revision ${record.revision} · ${formatMoment(record.updated_at)}`,
         [{ name: 'Formula', headers: ['Colour', 'Print sides', 'Ink formula'], rows: colours.map((c) => [c.colour, sideText(c.sides), c.formula ?? '']) }],
       )
     } catch (err) {
@@ -119,6 +119,8 @@ export function InkFormulaPage() {
           <dd>{record.category || '—'}</dd>
           <dt>Production Plan Date</dt>
           <dd>{formatDate(record.plan_date) || '—'}</dd>
+          <dt>Type of Paper</dt>
+          <dd>{record.paper_type || '—'}</dd>
         </dl>
       </section>
 

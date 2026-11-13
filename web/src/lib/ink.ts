@@ -15,6 +15,7 @@ export interface InkRecord {
   job_name: string | null
   category: string | null
   plan_date: string | null
+  paper_type: string | null
   revision: number
   archived: boolean
   created_by_name: string | null
@@ -33,8 +34,11 @@ export interface InkRevision {
 }
 
 export const RECORD_COLUMNS =
-  'id, record_no, job_id, order_no, order_key, job_name, category, plan_date, revision, archived, created_by_name, updated_by_name, created_at, updated_at'
+  'id, record_no, job_id, order_no, order_key, job_name, category, plan_date, paper_type, revision, archived, created_by_name, updated_by_name, created_at, updated_at'
 
 export const formulaLabel = (n: number | null | undefined) => (n ? `IF-${String(n).padStart(5, '0')}` : 'New formula')
 
 export const sideText = (sides: string[]) => (sides.length ? sides.join(', ') : '—')
+
+// C, M, Y, K are standard process colours: they need no ink formula.
+export const isStandardColour = (colour: string) => ['c', 'm', 'y', 'k'].includes(colour.trim().toLowerCase())

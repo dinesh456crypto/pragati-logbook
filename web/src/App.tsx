@@ -17,6 +17,8 @@ import { ProductionLogPage } from './pages/ProductionLogPage'
 import { InkEntryPage } from './pages/InkEntryPage'
 import { InkSummaryPage } from './pages/InkSummaryPage'
 import { InkFormulaPage } from './pages/InkFormulaPage'
+import { WastageEntryPage } from './pages/WastageEntryPage'
+import { WastageSummaryPage } from './pages/WastageSummaryPage'
 import { ToastProvider } from './components/Toast'
 import { MASTERS } from './lib/masters'
 
@@ -30,6 +32,8 @@ const BUILT: Record<string, ComponentType> = {
   '/production/log': ProductionLogPage,
   '/ink/entry': InkEntryPage,
   '/ink/summary': InkSummaryPage,
+  '/wastage/entry': WastageEntryPage,
+  '/wastage/summary': WastageSummaryPage,
   ...Object.fromEntries(MASTERS.map((m) => [`/masters/${m.slug}`, MasterPage])),
 }
 

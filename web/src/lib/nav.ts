@@ -4,6 +4,7 @@ import {
   Droplets,
   Factory,
   LayoutDashboard,
+  PackageX,
   UsersRound,
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
@@ -81,6 +82,14 @@ export const NAV: NavModule[] = [
     items: [
       { label: 'Ink Formula Entry', path: '/ink/entry', resource: 'ink_formula', phase: 8 },
       { label: 'Ink Formula Job Summary', path: '/ink/summary', resource: 'ink_formula', phase: 8 },
+    ],
+  },
+  {
+    label: 'Wastage Management',
+    icon: PackageX,
+    items: [
+      { label: 'Wastage Entry', path: '/wastage/entry', resource: 'wastage', phase: 9 },
+      { label: 'Wastage Summary', path: '/wastage/summary', resource: 'wastage', phase: 9 },
     ],
   },
 ]
