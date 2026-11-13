@@ -574,4 +574,5 @@ export interface OrderOption {
   planned: boolean
   sides_used: string[]
   sides_closed: string[]
+  note?: string // extra text shown in the order list
 }

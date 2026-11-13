@@ -9,11 +9,13 @@ interface Props {
   options: OrderOption[]
   disabled?: boolean
   invalid?: boolean
+  allowNew?: boolean // offer "use as a new order" for numbers not in the list
+  placeholder?: string
   onSelect: (orderNo: string) => void
 }
 
 // Searchable order list: pick a planned / open order, or type a new order number.
-export function OrderPicker({ value, options, disabled, invalid, onSelect }: Props) {
+export function OrderPicker({ value, options, disabled, invalid, allowNew = true, placeholder, onSelect }: Props) {
   const [text, setText] = useState(value)
   const [lastValue, setLastValue] = useState(value)
   const [open, setOpen] = useState(false)
@@ -38,7 +40,7 @@ export function OrderPicker({ value, options, disabled, invalid, onSelect }: Pro
   const exact = options.some((o) => o.order_no.toLowerCase() === typed.toLowerCase())
   const items: { order_no: string; option?: OrderOption }[] = [
     ...matches.map((o) => ({ order_no: o.order_no, option: o })),
-    ...(typed && !exact ? [{ order_no: typed }] : []),
+    ...(typed && !exact && allowNew ? [{ order_no: typed }] : []),
   ]
 
   function choose(orderNo: string) {
@@ -58,7 +60,7 @@ export function OrderPicker({ value, options, disabled, invalid, onSelect }: Pro
     } else if (e.key === 'Enter') {
       e.preventDefault()
       if (open && items[active]) choose(items[active].order_no)
-      else choose(typed)
+      else if (allowNew || exact) choose(typed)
     } else if (e.key === 'Escape') {
       setOpen(false)
     }
@@ -75,7 +77,7 @@ export function OrderPicker({ value, options, disabled, invalid, onSelect }: Pro
           aria-expanded={open}
           aria-controls={listId}
           aria-autocomplete="list"
-          placeholder="Search planned orders or type a new order number"
+          placeholder={placeholder ?? 'Search planned orders or type a new order number'}
           maxLength={60}
           onChange={(e) => {
             setText(e.target.value)
@@ -88,7 +90,10 @@ export function OrderPicker({ value, options, disabled, invalid, onSelect }: Pro
             // Let a click on an option land first.
             setTimeout(() => {
               setOpen(false)
-              if (text.trim() !== value.trim()) onSelect(text.trim())
+              if (text.trim() === value.trim()) return
+              // Without new orders, only an order from the list can be chosen.
+              if (allowNew || exact || !text.trim()) onSelect(text.trim())
+              else setText(value)
             }, 150)
           }}
         />
@@ -109,7 +114,9 @@ export function OrderPicker({ value, options, disabled, invalid, onSelect }: Pro
       </div>
       {open && !disabled && (
         <ul className="picker-list" id={listId} role="listbox">
-          {items.length === 0 && <li className="picker-empty">No open orders. Type an order number to enter a new one.</li>}
+          {items.length === 0 && (
+            <li className="picker-empty">{allowNew ? 'No open orders. Type an order number to enter a new one.' : 'No matching orders.'}</li>
+          )}
           {items.map((it, i) => (
             <li
               key={it.order_no + (it.option ? '' : '-new')}
@@ -131,6 +138,7 @@ export function OrderPicker({ value, options, disabled, invalid, onSelect }: Pro
                     {it.option.planned ? `Planned ${formatDate(it.option.plan_date)}` : 'Not in plan'}
                     {it.option.sides_used.length > 0 && ` · Printed: ${it.option.sides_used.join(', ')}`}
                     {it.option.sides_closed.length > 0 && ` · Closed: ${it.option.sides_closed.join(', ')}`}
+                    {it.option.note && ` · ${it.option.note}`}
                   </span>
                 </>
               ) : (

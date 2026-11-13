@@ -14,6 +14,9 @@ import { ProductionEntriesPage } from './pages/ProductionEntriesPage'
 import { ProductionEntryPage } from './pages/ProductionEntryPage'
 import { DowntimePage } from './pages/DowntimePage'
 import { ProductionLogPage } from './pages/ProductionLogPage'
+import { InkEntryPage } from './pages/InkEntryPage'
+import { InkSummaryPage } from './pages/InkSummaryPage'
+import { InkFormulaPage } from './pages/InkFormulaPage'
 import { ToastProvider } from './components/Toast'
 import { MASTERS } from './lib/masters'
 
@@ -25,6 +28,8 @@ const BUILT: Record<string, ComponentType> = {
   '/production/bdt': DowntimePage,
   '/production/odt': DowntimePage,
   '/production/log': ProductionLogPage,
+  '/ink/entry': InkEntryPage,
+  '/ink/summary': InkSummaryPage,
   ...Object.fromEntries(MASTERS.map((m) => [`/masters/${m.slug}`, MasterPage])),
 }
 
@@ -53,6 +58,9 @@ export default function App() {
                 </Route>
                 <Route element={<RequirePermission resource="production_entry" />}>
                   <Route path="production/entry/:id" element={<ProductionEntryPage />} />
+                </Route>
+                <Route element={<RequirePermission resource="ink_formula" />}>
+                  <Route path="ink/summary/:id" element={<InkFormulaPage />} />
                 </Route>
                 {NAV.flatMap((m) => m.items).map((item) => {
                   const Page = BUILT[item.path] ?? ComingSoonPage
