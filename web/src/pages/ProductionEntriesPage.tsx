@@ -191,7 +191,7 @@ export function ProductionEntriesPage() {
       <section className="card">
         <h2>Saved Drafts · resume where you left off</h2>
         {drafts.length === 0 ? (
-          <p className="empty">No drafts. A draft appears here after you press Save Draft (one per machine).</p>
+          <p className="empty">No drafts. Work is saved as a draft automatically while an entry is being filled in (one per machine).</p>
         ) : (
           <ul className="recent-list">
             {drafts.map((d) => (

@@ -1,11 +1,14 @@
-import { useEffect, useMemo, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { useEffect, useState } from 'react'
+import { Link, useNavigate } from 'react-router-dom'
 import { Plus } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../lib/auth'
 import { addDays, plantDate } from '../lib/dates'
 import type { Machine } from '../lib/types'
 import { formatDate, formatNumber } from '../lib/jobs'
+import { entryLabel, formatDuration } from '../lib/production'
+import { friendlyError } from '../lib/errors'
+import { percent } from '../lib/exports'
 
 interface RecentJob {
   id: string
@@ -15,22 +18,45 @@ interface RecentJob {
   quantity: number
 }
 
-// Dashboard layout with working filters. Figures are filled in as Production Plan
-// (phase 3), Production Entry (phase 4) and BDT/ODT (phase 5) come online.
-const METRICS: { label: string; hint: string }[] = [
-  { label: 'Total Planned Jobs', hint: 'All machines · date range' },
-  { label: 'Total Jobs Ran', hint: 'Unique submitted orders' },
-  { label: 'Total Changeover Time', hint: 'Machine-level elapsed changeover' },
-  { label: 'Total Production Time', hint: 'Submitted production entries' },
-  { label: 'Quality', hint: 'OK sheets ÷ total given sheets' },
-  { label: 'Total Wastage', hint: 'Wastage sheets' },
-  { label: 'Wastage %', hint: 'Wastage sheets ÷ total given sheets' },
-  { label: 'Total BDT', hint: 'Breakdown time (plant hours only)' },
-  { label: 'Total ODT', hint: 'Other downtime (plant hours only)' },
-]
+interface RecentEntry {
+  id: string
+  entry_no: number
+  production_date: string
+  order_no: string | null
+  job_name: string | null
+  shift: string | null
+  ok_sheets: number | null
+  machines: { code: string } | null
+}
+
+interface Figures {
+  entries: number
+  jobs_ran: number
+  given: number
+  ok: number
+  wastage: number
+  changeover_gross: number
+  changeover_net: number
+  run_gross: number
+  run_net: number
+  bdt: number
+  odt: number
+}
+
+interface Dashboard {
+  totals: Figures & { night_excluded: number }
+  machines: (Figures & { machine_id: string; code: string; name: string })[]
+  by_date: { date: string; entries: number; given: number; ok: number; wastage: number; run_gross: number }[]
+}
+
+const pct = (part: number, whole: number) => {
+  const p = percent(part, whole)
+  return p === null ? '—' : `${p}%`
+}
 
 export function DashboardPage() {
   const { can } = useAuth()
+  const navigate = useNavigate()
   const today = plantDate()
   const [machines, setMachines] = useState<Machine[]>([])
   const [loadError, setLoadError] = useState('')
@@ -39,7 +65,10 @@ export function DashboardPage() {
   const [to, setTo] = useState(today)
   const [plannedCount, setPlannedCount] = useState<number | null>(null)
   const [recentJobs, setRecentJobs] = useState<RecentJob[]>([])
+  const [recentEntries, setRecentEntries] = useState<RecentEntry[]>([])
+  const [figures, setFigures] = useState<Dashboard | null>(null)
   const canSeeJobs = can('production_plan', 'view')
+  const canOpenEntries = can('production_entry', 'view')
 
   useEffect(() => {
     supabase
@@ -55,6 +84,35 @@ export function DashboardPage() {
   }, [])
 
   const rangeError = from && to && from > to ? 'From Date cannot be after To Date.' : ''
+  const machineId = machine === 'ALL' ? null : machine
+
+  // Production figures (submitted entries only; BDT/ODT outside the overnight window).
+  useEffect(() => {
+    if (rangeError || !from || !to) return
+    let alive = true
+    let recent = supabase
+      .from('production_entries')
+      .select('id, entry_no, production_date, order_no, job_name, shift, ok_sheets, machines(code)')
+      .eq('status', 'submitted')
+      .gte('production_date', from)
+      .lte('production_date', to)
+      .order('production_date', { ascending: false })
+      .order('entry_no', { ascending: false })
+      .limit(5)
+    if (machineId) recent = recent.eq('machine_id', machineId)
+    Promise.all([supabase.rpc('dashboard_figures', { p_from: from, p_to: to, p_machine_id: machineId }), recent]).then(([f, r]) => {
+      if (!alive) return
+      if (f.error) setLoadError(friendlyError(f.error))
+      else {
+        setFigures(f.data as Dashboard)
+        setLoadError('')
+      }
+      setRecentEntries((r.data ?? []) as unknown as RecentEntry[])
+    })
+    return () => {
+      alive = false
+    }
+  }, [from, to, machineId, rangeError])
 
   // Planned jobs in the date range (by plan date). Planned jobs are not tied to a machine.
   useEffect(() => {
@@ -80,22 +138,42 @@ export function DashboardPage() {
       if (!alive) return
       setPlannedCount(counted.error ? null : (counted.count ?? 0))
       setRecentJobs(recent.error ? [] : ((recent.data ?? []) as RecentJob[]))
-      if (counted.error || recent.error) setLoadError((counted.error ?? recent.error)?.message ?? '')
     })
     return () => {
       alive = false
     }
   }, [from, to, rangeError, canSeeJobs])
-  const shownMachines = useMemo(
-    () => (machine === 'ALL' ? machines : machines.filter((m) => m.id === machine)),
-    [machine, machines],
-  )
 
   function reset() {
     setMachine('ALL')
     setFrom(addDays(today, -30))
     setTo(today)
   }
+
+  const t = figures?.totals
+  const metrics: { label: string; value: string; hint: string }[] = [
+    { label: 'Total Planned Jobs', value: plannedCount === null ? '—' : formatNumber(plannedCount), hint: 'All machines · by plan date' },
+    { label: 'Total Jobs Ran', value: t ? formatNumber(t.jobs_ran) : '—', hint: t ? `${formatNumber(t.entries)} submitted entries` : 'Unique orders' },
+    {
+      label: 'Total Changeover Time',
+      value: t ? formatDuration(t.changeover_net) : '—',
+      hint: t ? `Net · gross ${formatDuration(t.changeover_gross)}` : 'Make Ready + Registration + Colour Matching',
+    },
+    {
+      label: 'Total Production Time',
+      value: t ? formatDuration(t.run_net) : '—',
+      hint: t ? `Net · gross ${formatDuration(t.run_gross)}` : 'Submitted entries',
+    },
+    { label: 'Quality', value: t ? pct(t.ok, t.given) : '—', hint: 'OK sheets ÷ total given sheets' },
+    { label: 'Total Wastage', value: t ? formatNumber(t.wastage) : '—', hint: 'Wastage sheets' },
+    { label: 'Wastage %', value: t ? pct(t.wastage, t.given) : '—', hint: 'Wastage sheets ÷ total given sheets' },
+    { label: 'Total BDT', value: t ? formatDuration(t.bdt) : '—', hint: 'Breakdown time, overnight window left out' },
+    {
+      label: 'Total ODT',
+      value: t ? formatDuration(t.odt) : '—',
+      hint: t && t.night_excluded ? `${formatDuration(t.night_excluded)} overnight downtime not counted` : 'Other downtime, overnight window left out',
+    },
+  ]
 
   return (
     <>
@@ -141,21 +219,15 @@ export function DashboardPage() {
         <button type="button" onClick={reset}>
           Reset Filters
         </button>
-        <p className="muted small">Planned jobs count includes all machines.</p>
+        <p className="muted small">Planned jobs count includes all machines. Drafts are never counted.</p>
         {(rangeError || loadError) && <p className="notice error">{rangeError || loadError}</p>}
       </section>
 
-      <p className="notice info">
-        Production figures appear here once Production Entry (phase 4) is in use. Drafts are never counted.
-      </p>
-
       <div className="metric-grid">
-        {METRICS.map((m) => (
+        {metrics.map((m) => (
           <div key={m.label} className="card metric">
             <span className="metric-label">{m.label}</span>
-            <strong className="metric-value">
-              {m.label === 'Total Planned Jobs' && plannedCount !== null && !rangeError ? formatNumber(plannedCount) : '—'}
-            </strong>
+            <strong className="metric-value">{m.value}</strong>
             <span className="metric-hint">{m.hint}</span>
           </div>
         ))}
@@ -167,28 +239,35 @@ export function DashboardPage() {
           <table>
             <thead>
               <tr>
-                {['Machine', 'Jobs Ran', 'Changeover', 'Production', 'Quality', 'Wastage', 'BDT', 'ODT'].map((h) => (
+                {['Machine', 'Jobs Ran', 'Changeover (net)', 'Production (net)', 'Given', 'OK', 'Quality', 'Wastage', 'Wastage %', 'BDT', 'ODT'].map((h) => (
                   <th key={h}>{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
-              {shownMachines.length ? (
-                shownMachines.map((m) => (
-                  <tr key={m.id}>
+              {figures?.machines.length ? (
+                figures.machines.map((m) => (
+                  <tr key={m.machine_id}>
                     <td>
                       <b>{m.code}</b>
                       {m.name !== m.code ? ` · ${m.name}` : ''}
                     </td>
-                    {Array.from({ length: 7 }, (_, i) => (
-                      <td key={i}>—</td>
-                    ))}
+                    <td className="num">{formatNumber(m.jobs_ran)}</td>
+                    <td>{formatDuration(m.changeover_net)}</td>
+                    <td>{formatDuration(m.run_net)}</td>
+                    <td className="num">{formatNumber(m.given)}</td>
+                    <td className="num">{formatNumber(m.ok)}</td>
+                    <td className="num">{pct(m.ok, m.given)}</td>
+                    <td className="num">{formatNumber(m.wastage)}</td>
+                    <td className="num">{pct(m.wastage, m.given)}</td>
+                    <td>{formatDuration(m.bdt)}</td>
+                    <td>{formatDuration(m.odt)}</td>
                   </tr>
                 ))
               ) : (
                 <tr>
-                  <td colSpan={8} className="empty">
-                    No machines available.
+                  <td colSpan={11} className="empty">
+                    {figures ? 'No machines available.' : 'Loading…'}
                   </td>
                 </tr>
               )}
@@ -200,7 +279,35 @@ export function DashboardPage() {
       <div className="two-col">
         <section className="card">
           <h2>Recent Production Entries</h2>
-          <p className="empty">No submitted entries yet.</p>
+          {recentEntries.length === 0 ? (
+            <p className="empty">No submitted entries in this date range.</p>
+          ) : (
+            <ul className="recent-list">
+              {recentEntries.map((e) => (
+                <li
+                  key={e.id}
+                  className={canOpenEntries ? 'clickable' : ''}
+                  onClick={() => canOpenEntries && navigate(`/production/entry/${e.id}`)}
+                >
+                  <span>
+                    <b>{e.order_no}</b> · {e.machines?.code}
+                    <span className="sub">
+                      {entryLabel(e.entry_no)} · {e.job_name}
+                    </span>
+                  </span>
+                  <span className="muted small" style={{ textAlign: 'right' }}>
+                    {formatDate(e.production_date)} · Shift {e.shift}
+                    <span className="sub">{formatNumber(e.ok_sheets)} OK sheets</span>
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+          {can('production_log', 'view') && (
+            <Link to="/production/log" className="small">
+              Open Production Log Summary →
+            </Link>
+          )}
         </section>
         <section className="card">
           <h2>Recently Planned Jobs</h2>
@@ -231,6 +338,42 @@ export function DashboardPage() {
           )}
         </section>
       </div>
+
+      <section className="card">
+        <h2>Production by Date</h2>
+        <div className="tablewrap">
+          <table className="compact">
+            <thead>
+              <tr>
+                {['Date', 'Entries', 'Given', 'OK', 'Quality', 'Wastage', 'Production'].map((h) => (
+                  <th key={h}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {figures?.by_date.length ? (
+                figures.by_date.map((d) => (
+                  <tr key={d.date}>
+                    <td>{formatDate(d.date)}</td>
+                    <td className="num">{d.entries}</td>
+                    <td className="num">{formatNumber(d.given)}</td>
+                    <td className="num">{formatNumber(d.ok)}</td>
+                    <td className="num">{pct(d.ok, d.given)}</td>
+                    <td className="num">{formatNumber(d.wastage)}</td>
+                    <td>{formatDuration(d.run_gross)}</td>
+                  </tr>
+                ))
+              ) : (
+                <tr>
+                  <td colSpan={7} className="empty">
+                    No submitted entries in this date range.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </section>
     </>
   )
 }

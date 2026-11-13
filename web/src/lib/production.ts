@@ -262,6 +262,15 @@ function mergedDowntime(rows: DowntimeRow[]): Interval[] {
   return out
 }
 
+// True when two downtime rows overlap (a machine has one BDT or ODT at a time).
+export function downtimeOverlaps(rows: DowntimeRow[]): boolean {
+  const list = rows
+    .map((r) => [stampMs(r.span.start), stampMs(r.span.end) ?? Infinity] as const)
+    .filter((x): x is [number, number] => x[0] !== null && x[1] > x[0])
+    .sort((a, b) => a[0] - b[0])
+  return list.some((x, i) => i > 0 && x[0] < list[i - 1][1])
+}
+
 export function overlapMinutes(rows: DowntimeRow[], span: Span): number {
   const a = stampMs(span.start)
   const b = stampMs(span.end)

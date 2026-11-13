@@ -144,7 +144,15 @@ node supabase/tests/timeline_downtime.test.mjs \
 
 node supabase/tests/plan_bb.test.mjs <the five migrations above> \
   supabase/migrations/20261116100000_phase4c_bb_one_slot.sql
+
+node supabase/tests/downtime_reports.test.mjs <the six migrations above> \
+  supabase/migrations/20261117100000_phase5_downtime_rules_reports.sql
 ```
+
+Reports: the dashboard and Production Log Summary count only submitted entries.
+Downtime between the end of B shift (the last job's production end, not before
+4:30 PM, or 1:00 AM when no job ran, unless an admin sets it) and 8:00 AM is not
+counted.
 
 ## Importing data from the old Google Sheets system
 

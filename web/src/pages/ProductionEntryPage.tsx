@@ -17,6 +17,7 @@ import {
   changeoverRequired,
   changeoverTotals,
   defaultProductionDate,
+  downtimeOverlaps,
   downtimePlacement,
   emptyDowntime,
   entryLabel,
@@ -987,6 +988,9 @@ function EntryEditor({ entryId }: { entryId: string | null }) {
             <Plus size={15} /> Add ODT
           </button>
         </div>
+      )}
+      {downtimeOverlaps(st.downtime) && (
+        <p className="notice warn">Two downtime rows overlap. A machine can have only one BDT or ODT at a time: change the times.</p>
       )}
       {errorOf('downtime') && <p className="field-error">{errorOf('downtime')}</p>}
       <div className="totals">
