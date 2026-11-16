@@ -3,7 +3,7 @@ import type { FormEvent } from 'react'
 import { Navigate, useLocation } from 'react-router-dom'
 import { useAuth } from '../lib/auth'
 import { isValidUsername } from '../lib/username'
-import { BrandMark } from '../components/Brand'
+import { COMPANY } from '../components/Brand'
 import { PasswordInput } from '../components/PasswordInput'
 
 export function LoginPage() {
@@ -46,10 +46,10 @@ export function LoginPage() {
     <div className="auth-page">
       <form className="card auth-card" onSubmit={submit}>
         <div className="auth-brand">
-          <BrandMark size={52} />
+          <img src="/logo-full.png" alt="Pragati" width={220} height={108} />
           <div>
-            <strong>PRAGATI OFFSET</strong>
-            <span>Production | Precision | Performance</span>
+            <strong>{COMPANY}</strong>
+            <span>Production Logbook</span>
           </div>
         </div>
         <h1>Sign in</h1>
@@ -80,6 +80,7 @@ export function LoginPage() {
           {notice || error}
         </p>
       </form>
+      <p className="auth-foot">© {new Date().getFullYear()} {COMPANY}</p>
     </div>
   )
 }

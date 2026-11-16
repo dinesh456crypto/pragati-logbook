@@ -19,7 +19,7 @@ export async function downloadExcel(fileName: string, tables: ExportTable[]) {
     columns: t.headers.map((h, i) => ({ width: t.widths?.[i] ?? Math.min(40, Math.max(10, h.length + 2)) })),
     stickyRowsCount: 1,
     data: [
-      t.headers.map((h) => ({ value: h, fontWeight: 'bold' as const, backgroundColor: '#E5ECF2' })),
+      t.headers.map((h) => ({ value: h, fontWeight: 'bold' as const, backgroundColor: '#E7EAEE' })),
       ...t.rows.map((r) =>
         r.map((v) => (v === null || v === undefined || v === '' ? null : typeof v === 'number' ? { value: v, type: Number } : { value: String(v) })),
       ),
@@ -28,18 +28,51 @@ export async function downloadExcel(fileName: string, tables: ExportTable[]) {
   await writeXlsxFile(sheets).toFile(fileName.endsWith('.xlsx') ? fileName : `${fileName}.xlsx`)
 }
 
+export const COMPANY = 'Pragati Offset Private Limited'
+
+// The logo for report headers (null if it can't be loaded: the report still downloads).
+async function logoData(): Promise<string | null> {
+  try {
+    const blob = await fetch('/logo-full.png').then((r) => (r.ok ? r.blob() : Promise.reject(new Error('no logo'))))
+    return await new Promise((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = () => resolve(String(reader.result))
+      reader.onerror = reject
+      reader.readAsDataURL(blob)
+    })
+  } catch {
+    return null
+  }
+}
+
 export async function downloadPdf(fileName: string, title: string, subtitle: string, tables: ExportTable[]) {
-  const [{ jsPDF }, { autoTable }] = await Promise.all([import('jspdf'), import('jspdf-autotable')])
+  const [{ jsPDF }, { autoTable }, logo] = await Promise.all([import('jspdf'), import('jspdf-autotable'), logoData()])
   const widest = Math.max(...tables.map((t) => t.headers.length))
   const doc = new jsPDF({ orientation: 'landscape', unit: 'pt', format: widest > 16 ? 'a3' : 'a4' })
-  const navy: [number, number, number] = [16, 43, 70]
+  const navy: [number, number, number] = [29, 31, 36]
+  const pageWidth = doc.internal.pageSize.getWidth()
+  // Header: logo, title and filters on the left, company name on the right, brand spectrum line.
+  let x = 32
+  if (logo) {
+    doc.addImage(logo, 'PNG', 32, 16, 76, 37)
+    x = 120
+  }
   doc.setFontSize(15)
   doc.setTextColor(...navy)
-  doc.text(title, 32, 36)
+  doc.text(title, x, 34)
   doc.setFontSize(9)
   doc.setTextColor(90)
-  doc.text(subtitle, 32, 52)
-  let y = 64
+  doc.text(subtitle, x, 49, { maxWidth: pageWidth - x - 200 })
+  doc.setFontSize(9)
+  doc.setTextColor(...navy)
+  doc.text(COMPANY, pageWidth - 32, 30, { align: 'right' })
+  const spectrum: [number, number, number][] = [[216, 49, 57], [219, 42, 132], [236, 100, 52], [231, 187, 52], [58, 163, 106], [0, 162, 167], [0, 140, 199], [107, 61, 143]]
+  const band = (pageWidth - 64) / spectrum.length
+  spectrum.forEach((c, i) => {
+    doc.setFillColor(...c)
+    doc.rect(32 + i * band, 58, band + 0.5, 2.5, 'F')
+  })
+  let y = 70
   for (const t of tables) {
     if (tables.length > 1) {
       doc.setFontSize(11)
@@ -53,7 +86,7 @@ export async function downloadPdf(fileName: string, title: string, subtitle: str
       body: t.rows.map((r) => r.map((v) => (v === null || v === undefined ? '' : typeof v === 'number' ? v.toLocaleString('en-IN') : v))),
       styles: { fontSize: widest > 16 ? 6.5 : 8, cellPadding: 3, overflow: 'linebreak' },
       headStyles: { fillColor: navy, textColor: 255 },
-      alternateRowStyles: { fillColor: [244, 247, 250] },
+      alternateRowStyles: { fillColor: [245, 246, 248] },
       margin: { left: 32, right: 32 },
     })
     y = (doc as unknown as { lastAutoTable: { finalY: number } }).lastAutoTable.finalY + 20
@@ -63,7 +96,7 @@ export async function downloadPdf(fileName: string, title: string, subtitle: str
     doc.setPage(i)
     doc.setFontSize(8)
     doc.setTextColor(120)
-    doc.text(`Pragati Offset · Page ${i} of ${pages}`, 32, doc.internal.pageSize.getHeight() - 16)
+    doc.text(`${COMPANY} · Page ${i} of ${pages}`, 32, doc.internal.pageSize.getHeight() - 16)
   }
   doc.save(fileName.endsWith('.pdf') ? fileName : `${fileName}.pdf`)
 }

@@ -68,10 +68,10 @@ const FIELD_COLUMN: Record<string, string> = {
 }
 export const columnOf = (field: string) => FIELD_COLUMN[field] ?? field
 
-const NAVY = 'FF102B46'
-const TEAL = 'FF078B91'
-const MUTED = 'FF687B8D'
-const thin = { style: 'thin' as const, color: { argb: 'FFCBD6DF' } }
+const NAVY = 'FF1D1F24'
+const TEAL = 'FF0B74B5'
+const MUTED = 'FF6B7280'
+const thin = { style: 'thin' as const, color: { argb: 'FFD4D8DE' } }
 const box = { top: thin, left: thin, bottom: thin, right: thin }
 
 async function excel(): Promise<typeof import('exceljs')> {
@@ -99,7 +99,7 @@ export async function buildTemplate(papers: string[]): Promise<Blob> {
   // Instructions
   const ins = wb.addWorksheet('Instructions', { properties: { tabColor: { argb: TEAL } } })
   ins.columns = [{ width: 22 }, { width: 13 }, { width: 62 }, { width: 26 }]
-  ins.getCell('A1').value = 'Pragati Offset · Job Details bulk upload template'
+  ins.getCell('A1').value = 'Pragati Offset Private Limited · Job Details bulk upload template'
   ins.getCell('A1').font = { bold: true, size: 15, color: { argb: NAVY } }
   const steps = [
     `1. Fill one job per row on the "Jobs" sheet (up to ${MAX_ROWS} rows). Do not rename, move or delete the columns.`,

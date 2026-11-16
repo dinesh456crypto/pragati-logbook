@@ -140,7 +140,7 @@ export function WastageSummaryPage() {
     try {
       const name = `Pragati Wastage Summary ${from || 'all'}_${to || 'today'}`
       if (kind === 'excel') await downloadExcel(name, tables())
-      else await downloadPdf(name, 'Pragati Offset · Wastage Summary', `${formatDate(from) || 'All dates'} to ${formatDate(to) || 'today'}`, tables())
+      else await downloadPdf(name, 'Wastage Summary', `${formatDate(from) || 'All dates'} to ${formatDate(to) || 'today'}`, tables())
     } catch (err) {
       notify('error', `Could not create the file: ${(err as Error).message}`)
     } finally {

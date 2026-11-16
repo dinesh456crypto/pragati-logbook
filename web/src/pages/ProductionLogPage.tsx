@@ -389,7 +389,7 @@ export function ProductionLogPage() {
       const table = view === 'entries' ? entryTable() : reportTable()
       const name = `Pragati ${view === 'entries' ? 'Production Log' : table.name} ${filters.from}_${filters.to}`.replace(/[^\w .-]/g, '')
       if (kind === 'excel') await downloadExcel(name, [table])
-      else await downloadPdf(name, `Pragati Offset · ${view === 'entries' ? 'Production Log Summary' : table.name}`, filterText(), [table])
+      else await downloadPdf(name, `${view === 'entries' ? 'Production Log Summary' : table.name}`, filterText(), [table])
     } catch (err) {
       notify('error', `Could not create the file: ${(err as Error).message}`)
     } finally {
