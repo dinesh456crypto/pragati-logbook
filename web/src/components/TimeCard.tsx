@@ -5,7 +5,7 @@ import type { Span, Stamp } from '../lib/production'
 
 export interface AutoStart {
   manual: boolean // the start was typed by hand
-  source: string // where the automatic start comes from, e.g. "Make Ready end"
+  source: string // where the automatic start comes from, e.g. "Job Changeover end"
   value: Stamp | null // the automatic start, when known
   onReset: () => void
 }

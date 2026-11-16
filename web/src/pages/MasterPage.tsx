@@ -45,8 +45,9 @@ function MasterList({ config }: { config: MasterConfig }) {
     const columns = isMachine
       ? 'id, code, name, default_speed, sort_order, active, created_at, updated_at'
       : 'id, name, active, created_at, updated_at'
-    return supabase.from(config.table).select(columns).order('created_at').order('id')
-  }, [config.table, isMachine])
+    const q = supabase.from(config.table).select(columns)
+    return (config.category ? q.eq('category', config.category) : q).order('created_at').order('id')
+  }, [config.table, config.category, isMachine])
 
   const applyRows = useCallback(({ data, error }: { data: unknown; error: unknown }) => {
     if (error) setLoadError(friendlyError(error))
@@ -287,6 +288,7 @@ function MasterForm({ config, row, readOnly, onClose, onSaved }: FormProps) {
 
     const values: Record<string, unknown> = { name: cleanName, active }
     if (isMachine) Object.assign(values, { code: cleanCode, default_speed: speedNum })
+    if (config.category && !row) Object.assign(values, { category: config.category })
 
     setBusy(true)
     setError('')

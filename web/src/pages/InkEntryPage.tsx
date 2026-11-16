@@ -5,7 +5,7 @@ import { supabase } from '../lib/supabase'
 import { useAuth } from '../lib/auth'
 import { friendlyError } from '../lib/errors'
 import { formatDate } from '../lib/jobs'
-import { formatMoment } from '../lib/production'
+import { colourKey, formatMoment } from '../lib/production'
 import type { OrderOption } from '../lib/production'
 import { RECORD_COLUMNS, formulaLabel, isStandardColour, sideText } from '../lib/ink'
 import type { InkColour, InkRecord } from '../lib/ink'
@@ -15,11 +15,37 @@ import { useToast } from '../components/Toast'
 interface PlanJob {
   id: string
   order_no: string
+  cso_no?: string | null
   job_name: string
   category: string | null
   plan_date: string
   paper_type: string | null
 }
+
+// What ink_order_options returns: orders with a formula record, or still needing one.
+interface InkOrder {
+  job_id: string
+  order_no: string
+  cso_no: string | null
+  job_name: string
+  category: string | null
+  plan_date: string
+  paper_type: string | null
+  record_id: string | null
+  record_no: number | null
+}
+
+// A plan colour as order_plan_colours returns it. "known": the formula already saved for
+// this colour with the same paper type and category on an earlier order.
+interface PlanColour {
+  colour: string
+  sides: string[]
+  standard?: boolean
+  known: { record_id: string; record_no: number; order_no: string; formula: string } | null
+}
+type KnownRow = { colour: string; sides: string[] } & NonNullable<PlanColour['known']>
+const knownRows = (all: PlanColour[]): KnownRow[] =>
+  all.filter((x) => x.known && !isStandardColour(x.colour)).map((x) => ({ colour: x.colour, sides: x.sides, ...x.known! }))
 
 interface Row {
   colour: string
@@ -54,6 +80,8 @@ function InkEditor({ recordId, startOrder }: { recordId: string | null; startOrd
   const [rows, setRows] = useState<Row[]>([])
   // C, M, Y, K of the order: shown for information, no formula needed.
   const [standard, setStandard] = useState<string[]>([])
+  // Colours whose formula is already known from an earlier order: shown, not asked again.
+  const [known, setKnown] = useState<KnownRow[]>([])
   const [note, setNote] = useState('')
   const [errors, setErrors] = useState<string[]>([])
   const [loading, setLoading] = useState(false)
@@ -62,23 +90,31 @@ function InkEditor({ recordId, startOrder }: { recordId: string | null; startOrd
 
   const editable = record ? can('ink_formula', 'edit') && !record.archived : can('ink_formula', 'create')
 
+  // Only orders that have a formula record or still need a formula are offered.
   useEffect(() => {
-    Promise.all([
-      supabase
-        .from('production_jobs')
-        .select('id, order_no, job_name, category, plan_date, paper_types(name)')
-        .order('plan_date', { ascending: false }),
-      supabase.from('ink_formula_records').select('id, record_no, order_key').eq('archived', false),
-    ]).then(([j, r]) => {
+    supabase.rpc('ink_order_options').then(({ data, error }) => {
+      if (error) return notify('error', friendlyError(error))
+      const list = (data ?? []) as InkOrder[]
       setJobs(
-        ((j.data ?? []) as unknown as (Omit<PlanJob, 'paper_type'> & { paper_types: { name: string } | null })[]).map((x) => ({
-          ...x,
-          paper_type: x.paper_types?.name ?? null,
+        list.map((x) => ({
+          id: x.job_id,
+          order_no: x.order_no,
+          cso_no: x.cso_no,
+          job_name: x.job_name,
+          category: x.category,
+          plan_date: x.plan_date,
+          paper_type: x.paper_type,
         })),
       )
-      setLive(new Map(((r.data ?? []) as { id: string; record_no: number; order_key: string }[]).map((x) => [x.order_key, x])))
+      setLive(
+        new Map(
+          list
+            .filter((x) => x.record_id)
+            .map((x) => [x.order_no.trim().toLowerCase(), { id: x.record_id!, record_no: x.record_no! }]),
+        ),
+      )
     })
-  }, [])
+  }, [notify])
 
   const options: OrderOption[] = useMemo(
     () =>
@@ -86,6 +122,7 @@ function InkEditor({ recordId, startOrder }: { recordId: string | null; startOrd
         const rec = live.get(j.order_no.trim().toLowerCase())
         return {
           order_no: j.order_no,
+          cso_no: j.cso_no,
           job_name: j.job_name,
           plan_date: j.plan_date,
           planned: true,
@@ -112,16 +149,20 @@ function InkEditor({ recordId, startOrder }: { recordId: string | null; startOrd
       }
       const rec = r.data as InkRecord
       const saved = (c.data ?? []) as InkColour[]
-      let plan: { colour: string; sides: string[] }[] = []
+      let plan: PlanColour[] = []
       let std: string[] = []
+      let knownList: KnownRow[] = []
       if (rec.job_id) {
-        const p = await supabase.rpc('order_plan_colours', { p_job_id: rec.job_id })
-        const all = (p.data ?? []) as { colour: string; sides: string[] }[]
-        plan = all.filter((x) => !isStandardColour(x.colour))
+        // Only formulas saved before this record was made count as "already known".
+        const p = await supabase.rpc('order_plan_colours', { p_job_id: rec.job_id, p_before: rec.created_at })
+        const all = (p.data ?? []) as PlanColour[]
+        knownList = knownRows(all)
+        plan = all.filter((x) => !isStandardColour(x.colour) && !x.known)
         std = all.filter((x) => isStandardColour(x.colour)).map((x) => x.colour)
       }
-      const planKeys = new Set(plan.map((x) => x.colour.toLowerCase()))
-      const savedKeys = new Set(saved.map((x) => x.colour.toLowerCase()))
+      const knownKeys = new Set(knownList.map((x) => colourKey(x.colour)))
+      const planKeys = new Set(plan.map((x) => colourKey(x.colour)))
+      const savedKeys = new Set(saved.map((x) => colourKey(x.colour)))
       setRecord(rec)
       setOrderNo(rec.order_no)
       setJob({
@@ -133,14 +174,19 @@ function InkEditor({ recordId, startOrder }: { recordId: string | null; startOrd
         paper_type: rec.paper_type,
       })
       setStandard(std)
+      setKnown(knownList)
       setRows([
-        ...saved.filter((x) => !isStandardColour(x.colour)).map((x) => ({
-          colour: x.colour,
-          sides: x.sides,
-          formula: x.formula ?? '',
-          status: (rec.job_id && !planKeys.has(x.colour.toLowerCase()) ? 'gone' : 'plan') as Row['status'],
-        })),
-        ...plan.filter((x) => !savedKeys.has(x.colour.toLowerCase())).map((x) => ({ ...x, formula: '', status: 'new' as const })),
+        ...saved
+          .filter((x) => !isStandardColour(x.colour) && !knownKeys.has(colourKey(x.colour)))
+          .map((x) => ({
+            colour: x.colour,
+            sides: x.sides,
+            formula: x.formula ?? '',
+            status: (rec.job_id && !planKeys.has(colourKey(x.colour)) ? 'gone' : 'plan') as Row['status'],
+          })),
+        ...plan
+          .filter((x) => !savedKeys.has(colourKey(x.colour)))
+          .map((x) => ({ colour: x.colour, sides: x.sides, formula: '', status: 'new' as const })),
       ])
       setNote('')
       setErrors([])
@@ -158,6 +204,7 @@ function InkEditor({ recordId, startOrder }: { recordId: string | null; startOrd
       setJob(null)
       setRows([])
       setStandard([])
+      setKnown([])
       setRecord(null)
       return
     }
@@ -170,11 +217,16 @@ function InkEditor({ recordId, startOrder }: { recordId: string | null; startOrd
     const { data, error } = await supabase.rpc('order_plan_colours', { p_job_id: j.id })
     setLoading(false)
     if (error) return notify('error', friendlyError(error))
-    const all = (data ?? []) as { colour: string; sides: string[] }[]
+    const all = (data ?? []) as PlanColour[]
     setJob(j)
     setRecord(null)
     setStandard(all.filter((x) => isStandardColour(x.colour)).map((x) => x.colour))
-    setRows(all.filter((x) => !isStandardColour(x.colour)).map((x) => ({ ...x, formula: '', status: 'plan' })))
+    setKnown(knownRows(all))
+    setRows(
+      all
+        .filter((x) => !isStandardColour(x.colour) && !x.known)
+        .map((x) => ({ colour: x.colour, sides: x.sides, formula: '', status: 'plan' as const })),
+    )
     setDirty(false)
   }
 
@@ -235,7 +287,7 @@ function InkEditor({ recordId, startOrder }: { recordId: string | null; startOrd
           <p className="muted">
             {record
               ? `Revision ${record.revision} · last changed ${formatMoment(record.updated_at)}${record.updated_by_name ? ` by ${record.updated_by_name}` : ''}`
-              : 'Select an order from Production Plan, then enter the ink formula for each colour.'}
+              : 'Select a production order from Production Plan, then enter the ink formula for each new colour.'}
           </p>
         </div>
         {record && (
@@ -248,16 +300,20 @@ function InkEditor({ recordId, startOrder }: { recordId: string | null; startOrd
       <section className="card">
         <div className="form-grid">
           <label className="field span-2">
-            <span>Order Number *</span>
+            <span>Production Order Number *</span>
             <OrderPicker
               value={orderNo}
               options={options}
               allowNew={false}
               disabled={Boolean(record) || saving}
-              placeholder="Search by Order Number or Job Name"
+              placeholder="Search by Production Order, CSO or Job Name"
               onSelect={chooseOrder}
             />
           </label>
+          <div className="field">
+            <span>CSO Number</span>
+            <p className="field-value">{(job && jobs.find((x) => x.id === job.id)?.cso_no) || '—'}</p>
+          </div>
           <div className="field">
             <span>Job Name</span>
             <p className="field-value">{job?.job_name || '—'}</p>
@@ -288,11 +344,36 @@ function InkEditor({ recordId, startOrder }: { recordId: string | null; startOrd
               Standard process colours <b>{standard.join(', ')}</b> need no formula, so they are not listed here.
             </p>
           )}
+          {known.length > 0 && (
+            <div className="known-formulas">
+              <p className="smallcaps">Already known: same colour, paper type and category</p>
+              {known.map((k) => (
+                <div key={k.colour} className="ink-row known">
+                  <div className="ink-colour">
+                    <span className="chip">{k.colour}</span>
+                    <span className="muted small">{sideText(k.sides)}</span>
+                    <span className="badge green">Formula known</span>
+                  </div>
+                  <div className="field">
+                    <p className="field-value known-formula">{k.formula}</p>
+                    <span className="muted small">
+                      From{' '}
+                      <Link to={`/ink/summary/${k.record_id}`}>
+                        {formulaLabel(k.record_no)} · production order {k.order_no}
+                      </Link>
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
           {rows.length === 0 ? (
             <p className="notice warn">
-              {standard.length
-                ? 'This order uses only the standard colours C, M, Y, K, so it needs no ink formula.'
-                : 'This order has no colours in Production Plan. Add its colours under Job Details first.'}
+              {known.length
+                ? 'Every colour of this production order already has a formula (or is C, M, Y, K), so no new formula is needed.'
+                : standard.length
+                  ? 'This production order uses only the standard colours C, M, Y, K, so it needs no ink formula.'
+                  : 'This production order has no colours in Production Plan. Add its colours under Job Details first.'}
             </p>
           ) : (
             <div className="ink-rows">

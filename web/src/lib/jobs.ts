@@ -8,6 +8,8 @@ export interface Job {
   id: string
   plan_date: string // YYYY-MM-DD
   order_no: string
+  cso_no: string | null
+  coating_id: string | null
   job_name: string
   category: string | null
   ups: number
@@ -18,10 +20,11 @@ export interface Job {
   created_at: string
   updated_at: string
   paper_types: { name: string } | null
+  coatings: { name: string } | null
 }
 
 export const JOB_COLUMNS =
-  'id, plan_date, order_no, job_name, category, ups, job_type, paper_type_id, quantity, created_at, updated_at, paper_types(name), production_job_sides(print_side, colours, line)'
+  'id, plan_date, order_no, cso_no, coating_id, job_name, category, ups, job_type, paper_type_id, quantity, created_at, updated_at, paper_types(name), coatings(name), production_job_sides(print_side, colours, line)'
 
 // Tidies one typed value: trims and collapses repeated spaces.
 export const tidy = (value: string) => value.trim().replace(/\s+/g, ' ')

@@ -2113,3 +2113,96 @@ tr.row-bad td {
     grid-template-columns: 1fr;
   }
 }
+
+/* ---------- Downtime reason buttons: Man | Machine | Material | Others ---------- */
+.reason-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+.reason-grid.invalid {
+  outline: 2px solid var(--danger);
+  outline-offset: 4px;
+  border-radius: 8px;
+}
+.reason-col {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.reason-col-head {
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--navy);
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: var(--brand-tint);
+  text-align: center;
+}
+.reason-btn {
+  min-height: 38px;
+  padding: 6px 8px;
+  font-size: 13px;
+  line-height: 1.25;
+  white-space: normal;
+  text-align: center;
+  background: var(--surface);
+  border: 1px solid #d4d8de;
+  border-radius: 8px;
+  color: var(--ink);
+  font-weight: 500;
+}
+.reason-btn.on {
+  background: var(--teal);
+  border-color: var(--teal);
+  color: #fff;
+  font-weight: 600;
+}
+.reason-btn:disabled:not(.on) {
+  opacity: 0.55;
+}
+@media (max-width: 600px) {
+  .reason-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+/* Barcode scanner */
+.scan-video {
+  width: 100%;
+  max-height: 60vh;
+  border-radius: 10px;
+  background: #000;
+  object-fit: cover;
+}
+.with-scan {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+.with-scan > :first-child {
+  flex: 1;
+  min-width: 0;
+}
+.with-scan > button {
+  flex: none;
+}
+
+/* Ink formulas already known from an earlier order (read-only) */
+.known-formulas {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+.ink-row.known {
+  background: var(--brand-tint-2);
+  border-color: #cfe3f1;
+}
+.known-formula {
+  white-space: pre-wrap;
+  margin: 0 0 4px;
+}

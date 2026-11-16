@@ -1,6 +1,7 @@
-// Wastage Management: one wastage record per order, after production.
+// Wastage Management: one wastage record per production order, after production.
 
-export const UNITS = ['cartons', 'sheets'] as const
+export const UNITS = ['pcs', 'sheets'] as const
+export const unitLabel = (u: string) => (u === 'sheets' ? 'Sheets' : 'Pcs')
 export type Unit = (typeof UNITS)[number]
 
 export interface WastageLine {
@@ -53,16 +54,16 @@ export const RECORD_COLUMNS =
 
 export const wastageLabel = (n: number | null | undefined) => (n ? `WE-${String(n).padStart(5, '0')}` : 'New record')
 
-export const emptyLine = (): WastageLine => ({ process: '', defect: '', reason: '', quantity: '', unit: 'cartons' })
+export const emptyLine = (): WastageLine => ({ process: '', defect: '', reason: '', quantity: '', unit: 'pcs' })
 
-// Total wastage per unit, and everything expressed in cartons (1 sheet = UPS cartons).
+// Total wastage per unit, and everything expressed in Pcs (1 sheet = UPS Pcs).
 export function lineTotals(lines: { quantity: string | number; unit: string }[], ups: number | null) {
-  let cartons = 0
+  let pcs = 0
   let sheets = 0
   for (const l of lines) {
     const q = Number(l.quantity) || 0
     if (l.unit === 'sheets') sheets += q
-    else cartons += q
+    else pcs += q
   }
-  return { cartons, sheets, inCartons: ups ? cartons + sheets * ups : null }
+  return { pcs, sheets, inPcs: ups ? pcs + sheets * ups : null }
 }

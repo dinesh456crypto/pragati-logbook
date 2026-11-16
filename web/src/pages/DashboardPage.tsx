@@ -39,8 +39,11 @@ interface Figures {
   changeover_net: number
   run_gross: number
   run_net: number
-  bdt: number
-  odt: number
+  downtime: number
+  man: number
+  machine: number
+  material: number
+  others: number
 }
 
 interface Dashboard {
@@ -86,7 +89,7 @@ export function DashboardPage() {
   const rangeError = from && to && from > to ? 'From Date cannot be after To Date.' : ''
   const machineId = machine === 'ALL' ? null : machine
 
-  // Production figures (submitted entries only; BDT/ODT outside the overnight window).
+  // Production figures (submitted entries only; downtime outside the overnight window).
   useEffect(() => {
     if (rangeError || !from || !to) return
     let alive = true
@@ -157,7 +160,7 @@ export function DashboardPage() {
     {
       label: 'Total Changeover Time',
       value: t ? formatDuration(t.changeover_net) : '—',
-      hint: t ? `Net · gross ${formatDuration(t.changeover_gross)}` : 'Make Ready + Registration + Colour Matching',
+      hint: t ? `Net · gross ${formatDuration(t.changeover_gross)}` : 'Job Changeover + Registration + Colour Matching',
     },
     {
       label: 'Total Production Time',
@@ -167,11 +170,12 @@ export function DashboardPage() {
     { label: 'Quality', value: t ? pct(t.ok, t.given) : '—', hint: 'OK sheets ÷ total given sheets' },
     { label: 'Total Wastage', value: t ? formatNumber(t.wastage) : '—', hint: 'Wastage sheets' },
     { label: 'Wastage %', value: t ? pct(t.wastage, t.given) : '—', hint: 'Wastage sheets ÷ total given sheets' },
-    { label: 'Total BDT', value: t ? formatDuration(t.bdt) : '—', hint: 'Breakdown time, overnight window left out' },
     {
-      label: 'Total ODT',
-      value: t ? formatDuration(t.odt) : '—',
-      hint: t && t.night_excluded ? `${formatDuration(t.night_excluded)} overnight downtime not counted` : 'Other downtime, overnight window left out',
+      label: 'Total Downtime',
+      value: t ? formatDuration(t.downtime) : '—',
+      hint: t
+        ? `Man ${formatDuration(t.man)} · Machine ${formatDuration(t.machine)} · Material ${formatDuration(t.material)} · Others ${formatDuration(t.others)}${t.night_excluded ? ` · ${formatDuration(t.night_excluded)} overnight not counted` : ''}`
+        : 'Overnight window left out',
     },
   ]
 
@@ -239,7 +243,7 @@ export function DashboardPage() {
           <table>
             <thead>
               <tr>
-                {['Machine', 'Jobs Ran', 'Changeover (net)', 'Production (net)', 'Given', 'OK', 'Quality', 'Wastage', 'Wastage %', 'BDT', 'ODT'].map((h) => (
+                {['Machine', 'Jobs Ran', 'Changeover (net)', 'Production (net)', 'Given', 'OK', 'Quality', 'Wastage', 'Wastage %', 'Downtime', 'Man', 'Machine', 'Material', 'Others'].map((h) => (
                   <th key={h}>{h}</th>
                 ))}
               </tr>
@@ -260,13 +264,18 @@ export function DashboardPage() {
                     <td className="num">{pct(m.ok, m.given)}</td>
                     <td className="num">{formatNumber(m.wastage)}</td>
                     <td className="num">{pct(m.wastage, m.given)}</td>
-                    <td>{formatDuration(m.bdt)}</td>
-                    <td>{formatDuration(m.odt)}</td>
+                    <td>
+                      <b>{formatDuration(m.downtime)}</b>
+                    </td>
+                    <td>{formatDuration(m.man)}</td>
+                    <td>{formatDuration(m.machine)}</td>
+                    <td>{formatDuration(m.material)}</td>
+                    <td>{formatDuration(m.others)}</td>
                   </tr>
                 ))
               ) : (
                 <tr>
-                  <td colSpan={11} className="empty">
+                  <td colSpan={14} className="empty">
                     {figures ? 'No machines available.' : 'Loading…'}
                   </td>
                 </tr>

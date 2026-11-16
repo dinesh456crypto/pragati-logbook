@@ -21,6 +21,7 @@ import {
 } from '../lib/jobs'
 import type { Job } from '../lib/jobs'
 import { ConfirmDialog, Modal } from '../components/Modal'
+import { ScanButton } from '../components/ScanButton'
 import { JobBulkUpload } from '../components/JobBulkUpload'
 import { buildTemplate, saveBlob } from '../lib/jobUpload'
 import { useToast } from '../components/Toast'
@@ -32,6 +33,7 @@ interface PaperType {
   name: string
   active: boolean
 }
+type Coating = PaperType
 
 // Job Details: the list of planned jobs. Newest plan date first.
 export function JobsPage() {
@@ -53,8 +55,9 @@ export function JobsPage() {
   const [page, setPage] = useState(1)
   const [reload, setReload] = useState(0)
   const [papers, setPapers] = useState<PaperType[]>([])
+  const [coatings, setCoatings] = useState<Coating[]>([])
   // The dashboard's "New Job" button opens the form straight away (?new=1).
-  const [open, setOpen] = useState<{ job: Job | null; mode: 'view' | 'edit' } | null>(() =>
+  const [open, setOpen] = useState<{ job: Job | null; mode: 'view' | 'edit'; orderNo?: string } | null>(() =>
     params.get('new') === '1' && canCreate ? { job: null, mode: 'edit' } : null,
   )
   const [deleting, setDeleting] = useState<Job | null>(null)
@@ -88,7 +91,7 @@ export function JobsPage() {
     if (to) q = q.lte('plan_date', to)
     if (query) {
       const p = searchPattern(query)
-      q = q.or(`order_no.ilike.${p},job_name.ilike.${p},category.ilike.${p}`)
+      q = q.or(`order_no.ilike.${p},cso_no.ilike.${p},job_name.ilike.${p},category.ilike.${p}`)
     }
     q.then(({ data, count, error }) => {
       if (!alive) return
@@ -111,7 +114,28 @@ export function JobsPage() {
       .select('id, name, active')
       .order('name')
       .then(({ data }) => setPapers((data ?? []) as PaperType[]))
+    supabase
+      .from('coatings')
+      .select('id, name, active')
+      .order('name')
+      .then(({ data }) => setCoatings((data ?? []) as Coating[]))
   }, [])
+
+  // A scanned production order number opens that job, or starts a new job with the number filled in.
+  async function openScanned(text: string) {
+    const orderNo = tidy(text).slice(0, 60)
+    if (!orderNo) return
+    const { data, error } = await supabase
+      .from('production_jobs')
+      .select(JOB_COLUMNS)
+      .ilike('order_no', orderNo.replace(/[\\%_]/g, (c) => `\\${c}`))
+      .limit(1)
+    if (error) return notify('error', friendlyError(error))
+    const found = (data ?? [])[0] as unknown as Job | undefined
+    if (found) setOpen({ job: found, mode: 'view' })
+    else if (canCreate) setOpen({ job: null, mode: 'edit', orderNo })
+    else notify('error', `Production order ${orderNo} is not in Job Details.`)
+  }
 
   const pages = Math.max(1, Math.ceil(total / PAGE_SIZE))
   const filtersOn = Boolean(typed || from || to)
@@ -130,7 +154,7 @@ export function JobsPage() {
       notify(
         'error',
         error.code === '23503'
-          ? `Order ${deleting.order_no} is already used in production or ink records, so it cannot be deleted.`
+          ? `Production order ${deleting.order_no} is already used in production or ink records, so it cannot be deleted.`
           : friendlyError(error, 'job'),
       )
     } else if (!data?.length) {
@@ -142,15 +166,20 @@ export function JobsPage() {
     }
   }
 
-  const headers = ['S.No', 'Date', 'Order No', 'Job Name', 'Category', 'Print Sides', 'UPS', 'Job Type', 'Paper Type', 'Qty (Sheets)', '']
+  const headers = ['S.No', 'Date', 'Prod. Order No', 'CSO No', 'Job Name', 'Category', 'Print Sides', 'UPS', 'Job Type', 'Paper Type', 'Coating', 'Qty (Sheets)', '']
 
-  // The template's Type of Paper list is the Paper Type master at download time.
+  // The template's Type of Paper and Coating lists are the masters at download time.
   async function downloadTemplate() {
     setTemplateBusy(true)
     try {
-      const { data, error } = await supabase.from('paper_types').select('name').eq('active', true).order('name')
+      const [paperRes, coatingRes] = await Promise.all([
+        supabase.from('paper_types').select('name').eq('active', true).order('name'),
+        supabase.from('coatings').select('name').eq('active', true).order('name'),
+      ])
+      const error = paperRes.error ?? coatingRes.error
       if (error) throw new Error(friendlyError(error))
-      const blob = await buildTemplate(((data ?? []) as { name: string }[]).map((p) => p.name))
+      const names = (d: unknown) => ((d ?? []) as { name: string }[]).map((p) => p.name)
+      const blob = await buildTemplate(names(paperRes.data), names(coatingRes.data))
       saveBlob(blob, 'Pragati Job Details Bulk Upload Template.xlsx')
     } catch (err) {
       notify('error', `Could not create the template: ${(err as Error).message}`)
@@ -166,8 +195,10 @@ export function JobsPage() {
           <h1>Job Details</h1>
           <p className="muted">Planned printing jobs · the source for Production Entry and Ink Formula</p>
         </div>
-        {canCreate && (
-          <div className="actions">
+        <div className="actions">
+          <ScanButton label="Scan Order" onScan={openScanned} />
+          {canCreate && (
+            <>
             <button type="button" onClick={downloadTemplate} disabled={templateBusy}>
               <FileDown size={18} /> {templateBusy ? 'Preparing…' : 'Download Template'}
             </button>
@@ -177,8 +208,9 @@ export function JobsPage() {
             <button type="button" className="primary" onClick={() => setOpen({ job: null, mode: 'edit' })}>
               <Plus size={18} /> Create New Job
             </button>
-          </div>
-        )}
+            </>
+          )}
+        </div>
       </div>
 
       <section className="card">
@@ -191,7 +223,7 @@ export function JobsPage() {
                 setTyped(e.target.value)
                 setPage(1)
               }}
-              placeholder="Search Order No, Job Name or Category"
+              placeholder="Search Production Order, CSO, Job Name or Category"
               aria-label="Search"
             />
           </label>
@@ -269,12 +301,14 @@ export function JobsPage() {
                     <td>
                       <b>{j.order_no}</b>
                     </td>
+                    <td>{j.cso_no}</td>
                     <td className="wrap">{j.job_name}</td>
                     <td>{j.category}</td>
                     <td>{sortedSides(j).map((x) => x.print_side).join(', ')}</td>
                     <td className="num">{j.ups}</td>
                     <td>{j.job_type}</td>
                     <td>{j.paper_types?.name}</td>
+                    <td>{j.coatings?.name}</td>
                     <td className="num">{formatNumber(j.quantity)}</td>
                     <td className="row-actions" onClick={(e) => e.stopPropagation()}>
                       <button
@@ -339,6 +373,8 @@ export function JobsPage() {
           readOnly={open.mode === 'view' || (open.job ? !canEdit : !canCreate)}
           canEdit={canEdit}
           papers={papers}
+          coatings={coatings}
+          initialOrderNo={open.orderNo}
           onEdit={() => setOpen({ job: open.job, mode: 'edit' })}
           onClose={() => setOpen(null)}
           onSaved={(orderNo, isNew) => {
@@ -391,6 +427,8 @@ interface FormProps {
   readOnly: boolean
   canEdit: boolean
   papers: PaperType[]
+  coatings: Coating[]
+  initialOrderNo?: string
   onEdit: () => void
   onClose: () => void
   onSaved: (orderNo: string, isNew: boolean) => void
@@ -416,9 +454,11 @@ type SaveReply =
   | { ok: false; code: 'INVALID'; errors: { field: string; message: string }[] }
   | { ok: false; code: 'STALE'; message: string }
 
-function JobForm({ job, readOnly, canEdit, papers, onEdit, onClose, onSaved }: FormProps) {
+function JobForm({ job, readOnly, canEdit, papers, coatings, initialOrderNo, onEdit, onClose, onSaved }: FormProps) {
   const [date, setDate] = useState(job?.plan_date ?? plantDate())
-  const [orderNo, setOrderNo] = useState(job?.order_no ?? '')
+  const [orderNo, setOrderNo] = useState(job?.order_no ?? initialOrderNo ?? '')
+  const [csoNo, setCsoNo] = useState(job?.cso_no ?? '')
+  const [coatingId, setCoatingId] = useState(job?.coating_id ?? '')
   const [jobName, setJobName] = useState(job?.job_name ?? '')
   const [category, setCategory] = useState(job?.category ?? '')
   const [ups, setUps] = useState(job ? String(job.ups) : '')
@@ -446,6 +486,10 @@ function JobForm({ job, readOnly, canEdit, papers, onEdit, onClose, onSaved }: F
     () => papers.filter((p) => p.active || p.id === job?.paper_type_id),
     [papers, job?.paper_type_id],
   )
+  const coatingOptions = useMemo(
+    () => coatings.filter((c) => c.active || c.id === job?.coating_id),
+    [coatings, job?.coating_id],
+  )
   const usedSides = slots.map((x) => x.print_side).filter(Boolean)
   const group = usedSides.map(sideGroup).find(Boolean) ?? ''
 
@@ -459,6 +503,8 @@ function JobForm({ job, readOnly, canEdit, papers, onEdit, onClose, onSaved }: F
     const values = {
       plan_date: date,
       order_no: tidy(orderNo),
+      cso_no: tidy(csoNo),
+      coating_id: coatingId || null,
       job_name: tidy(jobName),
       category: tidy(category) || null,
       ups: Number(ups),
@@ -518,14 +564,31 @@ function JobForm({ job, readOnly, canEdit, papers, onEdit, onClose, onSaved }: F
       }
     >
       <form id="job-form" className="form-stack" onSubmit={submit} noValidate>
+        {initialOrderNo && !job && (
+          <p className="notice info">Scanned production order {initialOrderNo} is not planned yet: fill in the new job.</p>
+        )}
         <div className="form-grid">
           <label className="field">
             <span>Date *</span>
             <input type="date" value={date} onChange={(e) => setDate(e.target.value)} disabled={readOnly} />
           </label>
+          <div className="field">
+            <span>Production Order Number *</span>
+            <div className="with-scan">
+              <input
+                value={orderNo}
+                onChange={(e) => setOrderNo(e.target.value)}
+                maxLength={60}
+                disabled={readOnly}
+                autoFocus={!readOnly && !job && !initialOrderNo}
+                aria-label="Production Order Number"
+              />
+              {!readOnly && <ScanButton onScan={(text) => setOrderNo(tidy(text).slice(0, 60))} />}
+            </div>
+          </div>
           <label className="field">
-            <span>Order Number *</span>
-            <input value={orderNo} onChange={(e) => setOrderNo(e.target.value)} maxLength={60} disabled={readOnly} autoFocus={!readOnly && !job} />
+            <span>CSO Number *</span>
+            <input value={csoNo} onChange={(e) => setCsoNo(e.target.value)} maxLength={60} disabled={readOnly} />
           </label>
           <label className="field span-2">
             <span>Job Name *</span>
@@ -556,6 +619,18 @@ function JobForm({ job, readOnly, canEdit, papers, onEdit, onClose, onSaved }: F
                 <option key={p.id} value={p.id}>
                   {p.name}
                   {p.active ? '' : ' (inactive)'}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="field">
+            <span>Coating *</span>
+            <select value={coatingId} onChange={(e) => setCoatingId(e.target.value)} disabled={readOnly}>
+              <option value="">{coatingOptions.length ? 'Select…' : 'No coatings: add them under Master'}</option>
+              {coatingOptions.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name}
+                  {c.active ? '' : ' (inactive)'}
                 </option>
               ))}
             </select>

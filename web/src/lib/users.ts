@@ -43,8 +43,7 @@ export const ROLE_PRESETS: Record<Exclude<Role, 'super_admin'>, Matrix> = {
   manager: {
     dashboard: g('v'),
     production_entry: g('vced'),
-    bdt: g('vced'),
-    odt: g('vced'),
+    downtime: g('vced'),
     production_log: g('v'),
     production_plan: g('vced'),
     masters: g('vce'),
@@ -55,8 +54,7 @@ export const ROLE_PRESETS: Record<Exclude<Role, 'super_admin'>, Matrix> = {
   supervisor: {
     dashboard: g('v'),
     production_entry: g('vce'),
-    bdt: g('vce'),
-    odt: g('vce'),
+    downtime: g('vce'),
     production_log: g('v'),
     production_plan: g('v'),
     masters: g('v'),
@@ -66,8 +64,7 @@ export const ROLE_PRESETS: Record<Exclude<Role, 'super_admin'>, Matrix> = {
   operator: {
     dashboard: g('v'),
     production_entry: g('vce'),
-    bdt: g('vc'),
-    odt: g('vc'),
+    downtime: g('vc'),
   },
   office_user: {
     dashboard: g('v'),

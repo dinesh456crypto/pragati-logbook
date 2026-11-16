@@ -95,7 +95,7 @@ export function InkSummaryPage() {
     setReload((n) => n + 1)
   }
 
-  const headers = ['S.No', 'Formula ID', 'Order Number', 'Job Name', 'Date', 'Colours', 'Created By', 'Last Updated', '']
+  const headers = ['S.No', 'Formula ID', 'Production Order Number', 'Job Name', 'Date', 'Colours', 'Created By', 'Last Updated', '']
 
   return (
     <>
@@ -121,7 +121,7 @@ export function InkSummaryPage() {
                 setTyped(e.target.value)
                 setPage(1)
               }}
-              placeholder="Search Order Number or Job Name"
+              placeholder="Search Production Order Number or Job Name"
               aria-label="Search"
             />
           </label>
@@ -251,7 +251,7 @@ export function InkSummaryPage() {
           title={`${pending.archived ? 'Restore' : 'Archive'} ${formulaLabel(pending.record_no)}?`}
           message={
             pending.archived
-              ? `Order ${pending.order_no} will use this formula again.`
+              ? `Production order ${pending.order_no} will use this formula again.`
               : `The formula for order ${pending.order_no} will move to Archived records. Its history is kept, and a new formula can then be started for the order.`
           }
           confirmLabel={pending.archived ? 'Restore' : 'Archive'}

@@ -8,7 +8,7 @@ import { formatDate, formatNumber, searchPattern, tidy } from '../lib/jobs'
 import { formatMoment } from '../lib/production'
 import { downloadExcel, downloadPdf } from '../lib/exports'
 import type { ExportTable } from '../lib/exports'
-import { RECORD_COLUMNS, lineTotals, wastageLabel } from '../lib/wastage'
+import { RECORD_COLUMNS, lineTotals, unitLabel, wastageLabel } from '../lib/wastage'
 import type { WastageRecord } from '../lib/wastage'
 import { ConfirmDialog, Modal } from '../components/Modal'
 import { useToast } from '../components/Toast'
@@ -21,7 +21,7 @@ interface Line {
   defect: string
   reason: string | null
   quantity: number
-  unit: 'cartons' | 'sheets'
+  unit: 'pcs' | 'sheets'
 }
 type Row = WastageRecord & { wastage_lines: Line[] }
 
@@ -85,11 +85,11 @@ export function WastageSummaryPage() {
   const visible = filtered.slice((current - 1) * PAGE_SIZE, current * PAGE_SIZE)
 
   const totals = useMemo(() => {
-    let cartons = 0
+    let pcs = 0
     let sheets = 0
     for (const r of filtered) {
       const t = lineTotals(r.wastage_lines, r.ups)
-      cartons += t.cartons
+      pcs += t.pcs
       sheets += t.sheets
     }
     return {
@@ -97,7 +97,7 @@ export function WastageSummaryPage() {
       orderQty: filtered.reduce((s, r) => s + r.order_qty, 0),
       packed: filtered.reduce((s, r) => s + r.packed_qty, 0),
       prodWaste: filtered.reduce((s, r) => s + r.production_wastage, 0),
-      cartons,
+      pcs,
       sheets,
     }
   }, [filtered])
@@ -118,19 +118,19 @@ export function WastageSummaryPage() {
   const tables = (): ExportTable[] => [
     {
       name: 'Wastage Summary',
-      headers: ['S.No', 'Wastage ID', 'Order No', 'Job Name', 'UPS', 'OK Sheets', 'Production Wastage (sheets)', 'Order Qty (cartons)',
-        'Packed Qty (cartons)', 'Wastage (cartons)', 'Wastage (sheets)', 'Lines', 'Created By', 'Created', 'Remarks'],
+      headers: ['S.No', 'Wastage ID', 'Production Order No', 'Job Name', 'UPS', 'OK Sheets', 'Production Wastage (sheets)', 'Order Qty (Pcs)',
+        'Packed Qty (Pcs)', 'Wastage (Pcs)', 'Wastage (sheets)', 'Lines', 'Created By', 'Created', 'Remarks'],
       rows: filtered.map((r, i) => {
         const t = lineTotals(r.wastage_lines, r.ups)
         return [i + 1, wastageLabel(r.record_no), r.order_no, r.job_name, r.ups, r.ok_sheets, r.production_wastage, r.order_qty, r.packed_qty,
-          t.cartons, t.sheets, r.wastage_lines.length, r.created_by_name, formatMoment(r.created_at), r.remarks]
+          t.pcs, t.sheets, r.wastage_lines.length, r.created_by_name, formatMoment(r.created_at), r.remarks]
       }),
     },
     {
       name: 'Wastage Lines',
-      headers: ['Wastage ID', 'Order No', 'Line No', 'Function / Process', 'Defect', 'Reason / Defect', 'Wastage Qty', 'Unit'],
+      headers: ['Wastage ID', 'Production Order No', 'Line No', 'Function / Process', 'Defect', 'Reason / Defect', 'Wastage Qty', 'Unit'],
       rows: filtered.flatMap((r) =>
-        r.wastage_lines.map((l) => [wastageLabel(r.record_no), r.order_no, l.line, l.process, l.defect, l.reason, l.quantity, l.unit]),
+        r.wastage_lines.map((l) => [wastageLabel(r.record_no), r.order_no, l.line, l.process, l.defect, l.reason, l.quantity, unitLabel(l.unit)]),
       ),
     },
   ]
@@ -148,7 +148,7 @@ export function WastageSummaryPage() {
     }
   }
 
-  const headers = ['Wastage ID', 'Order No', 'Job Name', 'Prod. Wastage', 'Order / Packed', 'Wastage Lines', 'Last Updated', '']
+  const headers = ['Wastage ID', 'Prod. Order No', 'Job Name', 'Prod. Wastage', 'Order / Packed', 'Wastage Lines', 'Last Updated', '']
 
   return (
     <>
@@ -182,7 +182,7 @@ export function WastageSummaryPage() {
                 setTyped(e.target.value)
                 setPage(1)
               }}
-              placeholder="Search Order No or Job Name"
+              placeholder="Search Production Order No or Job Name"
               aria-label="Search"
             />
           </label>
@@ -213,7 +213,7 @@ export function WastageSummaryPage() {
             <b>{formatNumber(totals.records)}</b>
           </div>
           <div>
-            <span>Order / Packed (cartons)</span>
+            <span>Order / Packed (Pcs)</span>
             <b>
               {formatNumber(totals.orderQty)} / {formatNumber(totals.packed)}
             </b>
@@ -223,9 +223,9 @@ export function WastageSummaryPage() {
             <b>{formatNumber(totals.prodWaste)}</b>
           </div>
           <div>
-            <span>Wastage lines: cartons / sheets</span>
+            <span>Wastage lines: Pcs / sheets</span>
             <b>
-              {formatNumber(totals.cartons)} / {formatNumber(totals.sheets)}
+              {formatNumber(totals.pcs)} / {formatNumber(totals.sheets)}
             </b>
           </div>
         </div>
@@ -268,10 +268,10 @@ export function WastageSummaryPage() {
                       </td>
                       <td className="num">
                         {formatNumber(r.order_qty)} / {formatNumber(r.packed_qty)}
-                        <div className="muted small">cartons</div>
+                        <div className="muted small">Pcs</div>
                       </td>
                       <td>
-                        {[t.cartons ? `${formatNumber(t.cartons)} cartons` : '', t.sheets ? `${formatNumber(t.sheets)} sheets` : ''].filter(Boolean).join(' · ') || '—'}
+                        {[t.pcs ? `${formatNumber(t.pcs)} Pcs` : '', t.sheets ? `${formatNumber(t.sheets)} sheets` : ''].filter(Boolean).join(' · ') || '—'}
                         <div className="muted small">{r.wastage_lines.length} line{r.wastage_lines.length === 1 ? '' : 's'}</div>
                       </td>
                       <td>
@@ -320,7 +320,7 @@ export function WastageSummaryPage() {
 
       {viewing && (
         <Modal
-          title={`${wastageLabel(viewing.record_no)} · Order ${viewing.order_no}`}
+          title={`${wastageLabel(viewing.record_no)} · Production Order ${viewing.order_no}`}
           onClose={() => setViewing(null)}
           width={860}
           footer={
@@ -347,7 +347,7 @@ export function WastageSummaryPage() {
             <dd>{formatNumber(viewing.production_wastage)} sheets</dd>
             <dt>Order Qty / Packed Qty</dt>
             <dd>
-              {formatNumber(viewing.order_qty)} / {formatNumber(viewing.packed_qty)} cartons
+              {formatNumber(viewing.order_qty)} / {formatNumber(viewing.packed_qty)} Pcs
             </dd>
             {viewing.remarks && (
               <>
@@ -378,7 +378,7 @@ export function WastageSummaryPage() {
                     <td>{l.defect}</td>
                     <td>{l.reason}</td>
                     <td className="num">{formatNumber(l.quantity)}</td>
-                    <td>{l.unit === 'cartons' ? 'Cartons' : 'Sheets'}</td>
+                    <td>{unitLabel(l.unit)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -390,7 +390,7 @@ export function WastageSummaryPage() {
       {deleting && (
         <ConfirmDialog
           title={`Delete ${wastageLabel(deleting.record_no)}?`}
-          message={`The wastage record of order ${deleting.order_no} and its ${deleting.wastage_lines.length} line(s) will be removed permanently. This cannot be undone.`}
+          message={`The wastage record of production order ${deleting.order_no} and its ${deleting.wastage_lines.length} line(s) will be removed permanently. This cannot be undone.`}
           confirmLabel="Delete"
           danger
           busy={busy === 'delete'}

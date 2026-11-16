@@ -59,7 +59,8 @@ ok('user with delete right created', !r.error, r.error)
 await as(O, 'select public.mark_password_changed()')
 const paper = (await db.query("insert into public.paper_types (name) values ('Art Card') returning id")).rows[0].id
 r = await as(O, 'select public.save_production_job(null,$1::jsonb,$2::jsonb) r', [JSON.stringify({ plan_date: '2026-11-10', order_no: 'PO-1',
-  job_name: 'Box', category: 'Carton', ups: 4, job_type: 'NEW', paper_type_id: paper, quantity: 1000 }), JSON.stringify([{ print_side: 'O/S', colours: ['C'] }])])
+  job_name: 'Box', category: 'Carton', ups: 4, job_type: 'NEW', paper_type_id: paper, quantity: 1000, cso_no: 'CSO-1',
+  coating_id: (await db.query("insert into public.coatings (name) values ('UV') returning id")).rows[0].id }), JSON.stringify([{ print_side: 'O/S', colours: ['C'] }])])
 ok('operator saved a job', r.rows?.[0]?.r?.ok, r)
 await as(N, 'select public.mark_password_changed()')
 

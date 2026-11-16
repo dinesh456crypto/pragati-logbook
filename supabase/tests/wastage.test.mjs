@@ -45,7 +45,9 @@ await as(S, "select public.admin_save_user($1,'inku','Ink Person','office_user',
 await as(S, "select public.admin_save_user($1,'ravi','Ravi','operator',true,true,'{}',$2::jsonb)", [V, JSON.stringify([{ resource: 'production_entry', view: true, create: true }])])
 const one = async (sql) => (await db.query(sql)).rows[0].id
 const paper = await one("insert into public.paper_types (name) values ('Art Card 300') returning id")
+const coat = await one("insert into public.coatings (name) values ('UV') returning id")
 const job = (order, sides) => as(S, 'select public.save_production_job(null,$1::jsonb,$2::jsonb) r', [JSON.stringify({ plan_date: '2026-11-10', order_no: order,
+  cso_no: 'CSO-' + order, coating_id: coat,
   job_name: 'Carton ' + order, category: 'Carton', ups: 4, job_type: 'NEW', paper_type_id: paper, quantity: 1000 }), JSON.stringify(sides)])
 await job('PO-1', [{ print_side: 'F/S', colours: ['C', 'M', 'Y', 'K', 'PMS 185'] }, { print_side: 'B/S', colours: ['k', 'Gold'] }])
 await job('PO-2', [{ print_side: 'O/S', colours: ['C', 'M', 'Y', 'K'] }])
@@ -60,7 +62,7 @@ const save = async (user, id, order, colours, expected = null) => {
   return res.error ? res : res.rows[0].r
 }
 r = await save(I, null, 'PO-2', [{ colour: 'C', formula: 'x' }])
-ok('order with only C, M, Y, K needs no formula record', /only the standard colours/.test(JSON.stringify(r)), r)
+ok('order with only C, M, Y, K needs no formula record', /needs no new ink formula/.test(JSON.stringify(r)), r)
 r = await save(I, null, 'PO-1', [{ colour: 'C', formula: 'should be ignored' }, { colour: 'PMS 185', formula: 'Base 80% + Rubine 20%' }, { colour: 'Gold', formula: '' }])
 ok('formula saved', r.ok, r)
 r = await db.query('select colour from public.ink_formula_colours where record_id = $1 order by line', [r.id])
@@ -73,7 +75,6 @@ const m = (await db.query("select id from public.machines where code = 'K729'"))
 const op = await one("insert into public.operators (name) values ('Ravi') returning id")
 const sup = await one("insert into public.supervisors (name) values ('Kumar') returning id")
 const qc = await one("insert into public.qc_executives (name) values ('Asha') returning id")
-const coat = await one("insert into public.coatings (name) values ('UV') returning id")
 const wr = await one("select id from public.wastage_reasons limit 1")
 const today = (await db.query("select (now() at time zone 'Asia/Kolkata')::date::text d")).rows[0].d
 const D = new Date(Date.parse(today + 'T00:00:00Z') - 2 * 86400000).toISOString().slice(0, 10)
@@ -113,14 +114,14 @@ const saveW = async (user, id, order, rec, lines, expected = null) => {
 }
 r = await saveW(I, null, 'PO-1', { order_qty: '', packed_qty: '' }, [{ process: '', defect: 'x', quantity: 0, unit: 'boxes' }])
 ok('all problems listed together', r.code === 'INVALID' && r.errors.length >= 5, r)
-r = await saveW(I, null, 'PO-9', { order_qty: 10, packed_qty: 5 }, [{ process: 'Die cutting', defect: 'Torn', quantity: 2, unit: 'cartons' }])
+r = await saveW(I, null, 'PO-9', { order_qty: 10, packed_qty: 5 }, [{ process: 'Die cutting', defect: 'Torn', quantity: 2, unit: 'pcs' }])
 ok('order without production refused', /submitted production entries/.test(JSON.stringify(r)), r)
 r = await saveW(I, null, 'PO-1', { order_qty: 36000, packed_qty: 35000 }, [])
 ok('at least one wastage line needed', /at least one wastage line/.test(JSON.stringify(r)), r)
-r = await saveW(V, null, 'PO-1', { order_qty: 36000, packed_qty: 35000 }, [{ process: 'Die cutting', defect: 'Torn', quantity: 2, unit: 'cartons' }])
+r = await saveW(V, null, 'PO-1', { order_qty: 36000, packed_qty: 35000 }, [{ process: 'Die cutting', defect: 'Torn', quantity: 2, unit: 'pcs' }])
 ok('user without wastage rights cannot save', r.code === '42501', r)
 r = await saveW(I, null, 'po-1', { order_qty: 36000, packed_qty: 35000, remarks: 'Rush order' }, [
-  { process: 'Die cutting', defect: 'Torn edges', reason: 'Blunt blade', quantity: 120, unit: 'cartons' },
+  { process: 'Die cutting', defect: 'Torn edges', reason: 'Blunt blade', quantity: 120, unit: 'pcs' },
   { process: '', defect: '', reason: '', quantity: '' },
   { process: 'Pasting', defect: 'Glue spill', reason: '', quantity: 40, unit: 'sheets' },
 ])
@@ -131,13 +132,13 @@ ok('snapshot from production stored', rec.job_name === 'Carton PO-1' && rec.ups 
   && rec.order_qty === 36000 && rec.packed_qty === 35000 && rec.created_by_name === 'Ink Person', rec)
 r = await db.query('select line, process, unit, quantity from public.wastage_lines where record_id = $1 order by line', [wid])
 ok('lines numbered 1, 2', r.rows.length === 2 && r.rows[1].line === 2 && r.rows[1].unit === 'sheets', r.rows)
-r = await saveW(I, null, 'PO-1', { order_qty: 1, packed_qty: 1 }, [{ process: 'x', defect: 'y', quantity: 1, unit: 'cartons' }])
+r = await saveW(I, null, 'PO-1', { order_qty: 1, packed_qty: 1 }, [{ process: 'x', defect: 'y', quantity: 1, unit: 'pcs' }])
 ok('second record for the order refused (EXISTS)', r.code === 'EXISTS' && r.id === wid, r)
-r = await saveW(I, wid, null, { order_qty: 36000, packed_qty: 35500 }, [{ process: 'Die cutting', defect: 'Torn edges', quantity: 100, unit: 'cartons' }], rec.updated_at)
+r = await saveW(I, wid, null, { order_qty: 36000, packed_qty: 35500 }, [{ process: 'Die cutting', defect: 'Torn edges', quantity: 100, unit: 'pcs' }], rec.updated_at)
 ok('user without edit right cannot change', r.code === '42501', r)
-r = await saveW(S, wid, null, { order_qty: 36000, packed_qty: 35500 }, [{ process: 'Die cutting', defect: 'Torn edges', quantity: 100, unit: 'cartons' }], '2020-01-01T00:00:00Z')
+r = await saveW(S, wid, null, { order_qty: 36000, packed_qty: 35500 }, [{ process: 'Die cutting', defect: 'Torn edges', quantity: 100, unit: 'pcs' }], '2020-01-01T00:00:00Z')
 ok('out-of-date edit refused', r.code === 'STALE', r)
-r = await saveW(S, wid, null, { order_qty: 36000, packed_qty: 35500 }, [{ process: 'Die cutting', defect: 'Torn edges', quantity: 100, unit: 'cartons' }], rec.updated_at)
+r = await saveW(S, wid, null, { order_qty: 36000, packed_qty: 35500 }, [{ process: 'Die cutting', defect: 'Torn edges', quantity: 100, unit: 'pcs' }], rec.updated_at)
 ok('admin edits the record', r.ok, r)
 rec = (await db.query('select * from public.wastage_records where id = $1', [wid])).rows[0]
 ok('edit saved: packed 35500, 1 line, updated by admin', rec.packed_qty === 35500 && rec.updated_by_name === 'Dinesh Kumar P'

@@ -7,7 +7,7 @@ import { friendlyError } from '../lib/errors'
 import { formatDate, formatNumber } from '../lib/jobs'
 import { formatMoment } from '../lib/production'
 import type { OrderOption } from '../lib/production'
-import { RECORD_COLUMNS, UNITS, emptyLine, lineTotals, wastageLabel } from '../lib/wastage'
+import { RECORD_COLUMNS, UNITS, emptyLine, lineTotals, unitLabel, wastageLabel } from '../lib/wastage'
 import type { ProductionTotals, Unit, WastageLine, WastageRecord } from '../lib/wastage'
 import { OrderPicker } from '../components/OrderPicker'
 import { useToast } from '../components/Toast'
@@ -198,7 +198,7 @@ function WastageEditor({ recordId }: { recordId: string | null }) {
           <p className="muted">
             {record
               ? `Created ${formatMoment(record.created_at)}${record.created_by_name ? ` by ${record.created_by_name}` : ''} · last changed ${formatMoment(record.updated_at)}${record.updated_by_name ? ` by ${record.updated_by_name}` : ''}`
-              : 'Select an order that has finished production (submitted entries), then enter the quantities and wastage.'}
+              : 'Select a production order that has finished production (submitted entries), then enter the quantities and wastage.'}
           </p>
         </div>
         <Link to="/wastage/summary" className="button">
@@ -209,13 +209,13 @@ function WastageEditor({ recordId }: { recordId: string | null }) {
       <section className="card">
         <div className="form-grid">
           <label className="field span-2">
-            <span>Order Number *</span>
+            <span>Production Order Number *</span>
             <OrderPicker
               value={orderNo}
               options={options}
               allowNew={false}
               disabled={Boolean(record) || saving}
-              placeholder="Search orders with production entries"
+              placeholder="Search production orders with production entries"
               onSelect={chooseOrder}
             />
           </label>
@@ -282,11 +282,11 @@ function WastageEditor({ recordId }: { recordId: string | null }) {
         <section className="card">
           <div className="form-grid">
             <label className="field">
-              <span>Order Qty (cartons) *</span>
+              <span>Order Qty (Pcs) *</span>
               <input inputMode="numeric" value={orderQty} disabled={!editable} maxLength={9} onChange={(e) => (setOrderQty(digits(e.target.value)), setDirty(true))} />
             </label>
             <label className="field">
-              <span>Packed Qty (cartons) *</span>
+              <span>Packed Qty (Pcs) *</span>
               <input inputMode="numeric" value={packedQty} disabled={!editable} maxLength={9} onChange={(e) => (setPackedQty(digits(e.target.value)), setDirty(true))} />
             </label>
           </div>
@@ -325,7 +325,7 @@ function WastageEditor({ recordId }: { recordId: string | null }) {
                       <select value={l.unit} disabled={!editable} aria-label={`Line ${i + 1} unit`} onChange={(e) => setLine(i, { unit: e.target.value as Unit })}>
                         {UNITS.map((u) => (
                           <option key={u} value={u}>
-                            {u === 'cartons' ? 'Cartons' : 'Sheets'}
+                            {unitLabel(u)}
                           </option>
                         ))}
                       </select>
@@ -381,16 +381,16 @@ function WastageEditor({ recordId }: { recordId: string | null }) {
 
           <div className="totals">
             <div>
-              <span>Wastage in cartons</span>
-              <b>{formatNumber(sum.cartons)}</b>
+              <span>Wastage in Pcs</span>
+              <b>{formatNumber(sum.pcs)}</b>
             </div>
             <div>
               <span>Wastage in sheets</span>
               <b>{formatNumber(sum.sheets)}</b>
             </div>
             <div>
-              <span>Total as cartons{ups ? ` (1 sheet = ${ups} cartons)` : ''}</span>
-              <b>{sum.inCartons === null ? '—' : formatNumber(sum.inCartons)}</b>
+              <span>Total as Pcs{ups ? ` (1 sheet = ${ups} Pcs)` : ''}</span>
+              <b>{sum.inPcs === null ? '—' : formatNumber(sum.inPcs)}</b>
             </div>
           </div>
 

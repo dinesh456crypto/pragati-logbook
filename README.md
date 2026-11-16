@@ -9,7 +9,7 @@ Shift production logbook for Pragati Offset's printing machines.
 
 Built in phases (per the Pragati Offset FSD). **Done:** phase 1 – sign-in, Super Admin, per-user
 permission matrix, machine access, ten master tables, audit trail, sidebar layout and dashboard shell.
-Later phases add master screens, Production Plan, Production Entry, BDT/ODT, reports, user screens
+Later phases add master screens, Production Plan, Production Entry, Downtime, reports, user screens
 and ink formulas.
 
 ## Repository layout
@@ -150,10 +150,11 @@ node supabase/tests/plan_bb.test.mjs <the five migrations above> \
 node supabase/tests/downtime_reports.test.mjs <the six migrations above> \
   supabase/migrations/20261117100000_phase5_downtime_rules_reports.sql
 
-node supabase/tests/ink_formula.test.mjs $(ls supabase/migrations/*.sql | sort | grep -v phase9)
+node supabase/tests/ink_formula.test.mjs $(ls supabase/migrations/*.sql | sort | grep -v phase9 | grep -v 20261123)
 node supabase/tests/wastage.test.mjs $(ls supabase/migrations/*.sql | sort)
 node supabase/tests/users.test.mjs $(ls supabase/migrations/*.sql | sort)
 node supabase/tests/job_import.test.mjs $(ls supabase/migrations/*.sql | sort)
+node supabase/tests/cso_downtime_ink.test.mjs $(ls supabase/migrations/*.sql | sort)
 # go-live hardening is checked by running users / wastage / job_import with all migrations
 ```
 

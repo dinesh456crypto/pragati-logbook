@@ -97,7 +97,7 @@ export function ProductionEntriesPage() {
     if (filters.status) q = q.eq('status', filters.status)
     if (filters.from) q = q.gte('production_date', filters.from)
     if (filters.to) q = q.lte('production_date', filters.to)
-    if (query) q = q.or(`order_no.ilike.${searchPattern(query)},job_name.ilike.${searchPattern(query)}`)
+    if (query) q = q.or(`order_no.ilike.${searchPattern(query)},cso_no.ilike.${searchPattern(query)},job_name.ilike.${searchPattern(query)}`)
 
     Promise.all([
       q,
@@ -172,7 +172,7 @@ export function ProductionEntriesPage() {
     refresh()
   }
 
-  const headers = ['S.No', 'Entry ID', 'Date', 'Order No', 'Job Name', 'Machine', 'Shift', 'Side', 'Operator', 'Given', 'OK', 'Wastage', 'Production', 'Status', '']
+  const headers = ['S.No', 'Entry ID', 'Date', 'Prod. Order No', 'Job Name', 'Machine', 'Shift', 'Side', 'Operator', 'Given', 'OK', 'Wastage', 'Production', 'Status', '']
 
   return (
     <>
@@ -229,7 +229,7 @@ export function ProductionEntriesPage() {
                 setTyped(e.target.value)
                 setPage(1)
               }}
-              placeholder="Search Order No or Job Name"
+              placeholder="Search Production Order, CSO or Job Name"
               aria-label="Search"
             />
           </label>

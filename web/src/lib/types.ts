@@ -12,8 +12,7 @@ export const ROLE_LABELS: Record<Role, string> = {
 export type Resource =
   | 'dashboard'
   | 'production_entry'
-  | 'bdt'
-  | 'odt'
+  | 'downtime'
   | 'production_log'
   | 'production_plan'
   | 'masters'

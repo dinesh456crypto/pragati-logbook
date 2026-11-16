@@ -42,8 +42,7 @@ export const NAV: NavModule[] = [
     icon: Factory,
     items: [
       { label: 'Production Entry', path: '/production/entry', resource: 'production_entry', phase: 4 },
-      { label: 'BDT – Breakdown Time', path: '/production/bdt', resource: 'bdt', phase: 5 },
-      { label: 'ODT – Other Downtime', path: '/production/odt', resource: 'odt', phase: 5 },
+      { label: 'Downtime', path: '/production/downtime', resource: 'downtime', phase: 5 },
       { label: 'Production Log Summary', path: '/production/log', resource: 'production_log', phase: 6 },
     ],
   },
@@ -64,8 +63,10 @@ export const NAV: NavModule[] = [
       master('Paper Type', 'paper-types'),
       master('Coating', 'coatings'),
       master('Wastage Reasons', 'wastage-reasons'),
-      master('BDT Reasons', 'bdt-reasons'),
-      master('ODT Reasons', 'odt-reasons'),
+      master('Downtime Reasons – Man', 'downtime-man'),
+      master('Downtime Reasons – Machine', 'downtime-machine'),
+      master('Downtime Reasons – Material', 'downtime-material'),
+      master('Downtime Reasons – Others', 'downtime-others'),
     ],
   },
   {

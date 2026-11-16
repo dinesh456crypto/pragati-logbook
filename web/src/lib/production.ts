@@ -8,7 +8,7 @@ export const HELPERS = ['1', '2', '3', '4'] as const
 export const UNIT_COUNT = 7
 
 export const ACTIVITIES = [
-  { key: 'make_ready', label: 'Make Ready' },
+  { key: 'make_ready', label: 'Job Changeover' },
   { key: 'registration', label: 'Registration' },
   { key: 'colour_matching', label: 'Colour Matching' },
 ] as const
@@ -20,7 +20,7 @@ export const SECTIONS = [
   'Unit-wise Colour Allocation',
   'Changeover Time',
   'Run Time',
-  'Downtime (BDT / ODT)',
+  'Downtime',
   'Production Details',
 ] as const
 
@@ -28,7 +28,7 @@ export const SECTIONS = [
 export const STEPS = ['make_ready', 'registration', 'colour_matching', 'run'] as const
 export type StepKey = (typeof STEPS)[number]
 export const STEP_LABEL: Record<StepKey, string> = {
-  make_ready: 'Make Ready',
+  make_ready: 'Job Changeover',
   registration: 'Registration',
   colour_matching: 'Colour Matching',
   run: 'Production',
@@ -36,7 +36,7 @@ export const STEP_LABEL: Record<StepKey, string> = {
 
 // Which section shows each field (used to point at errors).
 const FIELD_SECTION: Record<string, number> = {
-  production_date: 0, machine_id: 0, shift: 0, order_no: 0, job_name: 0, category: 0, ups: 0, job_type: 0,
+  production_date: 0, machine_id: 0, shift: 0, order_no: 0, cso_no: 0, job_name: 0, category: 0, ups: 0, job_type: 0,
   paper_type_id: 0, planned_quantity: 0, print_side: 0, continuing: 0,
   operator_id: 1, supervisor_id: 1, qc_executive_id: 1, helpers: 1,
   planned_colours: 2, unit_colours: 2, coating_id: 2, colour_changes: 2, coating_changed: 2,
@@ -69,19 +69,42 @@ export interface WastageRow {
   reason_id: string
 }
 
+// Downtime reasons are grouped Man | Machine | Material | Others (Masters → Downtime Reasons).
+export const DOWNTIME_GROUPS = ['Man', 'Machine', 'Material', 'Others'] as const
+export type DowntimeGroup = (typeof DOWNTIME_GROUPS)[number]
+
 export interface DowntimeRow {
-  kind: '' | 'BDT' | 'ODT'
   reason_id: string
   span: Span
   remarks: string
 }
-export const emptyDowntime = (): DowntimeRow => ({ kind: '', reason_id: '', span: emptySpan(), remarks: '' })
+export const emptyDowntime = (): DowntimeRow => ({ reason_id: '', span: emptySpan(), remarks: '' })
+
+// Colour codes compare without case or spaces: 'PMS 185' = 'pms185'.
+export const colourKey = (c: string | null | undefined) => (c ?? '').replace(/\s/g, '').toLowerCase()
+
+// No. of Colour Changes and Coating Changed?, worked out the same way the database does:
+// unit by unit against the previous completed job on this machine (empty ↔ colour counts).
+// With no previous job, every used unit counts and the coating counts as changed.
+export function autoChanges(
+  unitColours: string[],
+  coatingId: string,
+  previous: { unit_colours?: (string | null)[] | null; coating_id?: string | null } | null,
+): { colourChanges: number; coatingChanged: boolean | null } {
+  const units = Array.from({ length: UNIT_COUNT }, (_, i) => unitColours[i] ?? '')
+  const colourChanges = previous
+    ? units.filter((c, i) => colourKey(c) !== colourKey(previous.unit_colours?.[i])).length
+    : units.filter((c) => c.trim() !== '').length
+  const coatingChanged = !coatingId ? null : previous ? (previous.coating_id ?? '') !== coatingId : true
+  return { colourChanges, coatingChanged }
+}
 
 export interface EntryState {
   production_date: string
   machine_id: string
   shift: string
   order_no: string
+  cso_no: string
   job_name: string
   category: string
   ups: string
@@ -131,6 +154,7 @@ export function newEntryState(): EntryState {
     machine_id: '',
     shift,
     order_no: '',
+    cso_no: '',
     job_name: '',
     category: '',
     ups: '',
@@ -262,7 +286,7 @@ function mergedDowntime(rows: DowntimeRow[]): Interval[] {
   return out
 }
 
-// True when two downtime rows overlap (a machine has one BDT or ODT at a time).
+// True when two downtime rows overlap (a machine has one downtime at a time).
 export function downtimeOverlaps(rows: DowntimeRow[]): boolean {
   const list = rows
     .map((r) => [stampMs(r.span.start), stampMs(r.span.end) ?? Infinity] as const)
@@ -301,7 +325,7 @@ export function changeoverTotals(st: EntryState): { gross: number | null; net: n
   }
 }
 
-// Which steps a downtime row falls in, e.g. "Make Ready 15 min · Registration 5 min".
+// Which steps a downtime row falls in, e.g. "Job Changeover 15 min · Registration 5 min".
 export function downtimePlacement(st: EntryState, row: DowntimeRow): string {
   const parts = STEPS.map((k) => ({ k, m: Math.round(overlapMinutes([row], st[k])) })).filter((x) => x.m > 0)
   return parts.map((x) => `${STEP_LABEL[x.k]} ${x.m} min`).join(' · ')
@@ -350,9 +374,8 @@ export function wastageTotal(rows: WastageRow[]): number {
 
 export function toPayload(st: EntryState) {
   const downtime = st.downtime
-    .filter((d) => d.kind || d.reason_id || spanTouched(d.span) || d.remarks.trim())
+    .filter((d) => d.reason_id || spanTouched(d.span) || d.remarks.trim())
     .map((d) => ({
-      kind: d.kind || null,
       reason_id: d.reason_id || null,
       start_at: stampToIso(d.span.start),
       end_at: stampToIso(d.span.end),
@@ -363,6 +386,7 @@ export function toPayload(st: EntryState) {
     machine_id: st.machine_id,
     shift: st.shift,
     order_no: st.order_no,
+    cso_no: st.cso_no,
     job_name: st.job_name,
     category: st.category,
     ups: int(st.ups),
@@ -378,8 +402,6 @@ export function toPayload(st: EntryState) {
     helpers: int(st.helpers),
     unit_colours: st.unit_colours.map((c) => c || null),
     coating_id: st.coating_id,
-    colour_changes: int(st.colour_changes),
-    coating_changed: st.coating_changed === '' ? null : st.coating_changed === 'yes',
     make_ready_start: stampToIso(st.make_ready.start),
     make_ready_end: stampToIso(st.make_ready.end),
     registration_start: stampToIso(st.registration.start),
@@ -409,6 +431,7 @@ export interface EntryRow {
   production_date: string
   shift: string | null
   order_no: string | null
+  cso_no: string | null
   order_key: string | null
   job_id: string | null
   job_name: string | null
@@ -461,11 +484,9 @@ const str = (v: number | string | null | undefined) => (v == null ? '' : String(
 const span = (a: string | null, b: string | null): Span => ({ start: isoToStamp(a), end: isoToStamp(b) })
 
 export interface DowntimeDbRow {
-  kind: 'BDT' | 'ODT'
   start_at: string | null
   end_at: string | null
-  bdt_reason_id: string | null
-  odt_reason_id: string | null
+  reason_id: string | null
   remarks: string | null
 }
 
@@ -480,6 +501,7 @@ export function fromRow(
     machine_id: r.machine_id,
     shift: str(r.shift),
     order_no: str(r.order_no),
+    cso_no: str(r.cso_no),
     job_name: str(r.job_name),
     category: str(r.category),
     ups: str(r.ups),
@@ -509,8 +531,7 @@ export function fromRow(
       ? wastage.map((w) => ({ quantity: str(w.quantity), reason_id: str(w.reason_id) }))
       : [{ quantity: '', reason_id: '' }],
     downtime: downtime.map((d) => ({
-      kind: d.kind,
-      reason_id: str(d.kind === 'BDT' ? d.bdt_reason_id : d.odt_reason_id),
+      reason_id: str(d.reason_id),
       span: span(d.start_at, d.end_at),
       remarks: str(d.remarks),
     })),
@@ -527,6 +548,8 @@ export interface SideColours {
 export interface OrderJob {
   id?: string
   order_no: string
+  cso_no?: string | null
+  coating_id?: string | null
   job_name: string
   category: string | null
   ups: number | null
@@ -561,14 +584,25 @@ export interface OrderStatus {
 }
 
 export interface Timeline {
-  previous: { id: string; entry_no: number; order_no: string | null; job_name: string | null; print_side: string | null; run_end: string } | null
-  downtime: { id: string; kind: 'BDT' | 'ODT'; start_at: string; end_at: string; minutes: number; reason: string | null }[]
-  open_downtime: { id: string; kind: 'BDT' | 'ODT'; start_at: string }[]
+  previous: {
+    id: string
+    entry_no: number
+    order_no: string | null
+    job_name: string | null
+    print_side: string | null
+    run_end: string
+    unit_colours: (string | null)[] | null
+    coating_id: string | null
+    coating: string | null
+  } | null
+  downtime: { id: string; kind: DowntimeGroup | null; start_at: string; end_at: string; minutes: number; reason: string | null }[]
+  open_downtime: { id: string; kind: DowntimeGroup | null; start_at: string }[]
   ready_at: string | null
 }
 
 export interface OrderOption {
   order_no: string
+  cso_no?: string | null
   job_name: string | null
   plan_date: string | null
   planned: boolean

@@ -21,6 +21,7 @@ interface LogRow {
   status: 'draft' | 'submitted'
   production_date: string
   order_no: string | null
+  cso_no: string | null
   order_key: string | null
   job_name: string | null
   job_type: string | null
@@ -44,8 +45,10 @@ interface LogRow {
   changeover_net_minutes: number | null
   run_minutes: number | null
   run_net_minutes: number | null
-  bdt_minutes: number
-  odt_minutes: number
+  man_minutes: number
+  machine_minutes: number
+  material_minutes: number
+  other_minutes: number
   remarks: string | null
   machines: { code: string } | null
   operators: { name: string } | null
@@ -56,7 +59,7 @@ interface LogRow {
 }
 
 const COLUMNS =
-  'id, entry_no, status, production_date, order_no, order_key, job_name, job_type, machine_id, shift, print_side, ups, unit_colours, machine_speed, total_sheets, ok_sheets, separate_sheets, wastage_sheets, make_ready_minutes, make_ready_net_minutes, registration_minutes, registration_net_minutes, colour_matching_minutes, colour_matching_net_minutes, changeover_gross_minutes, changeover_net_minutes, run_minutes, run_net_minutes, bdt_minutes, odt_minutes, remarks, machines(code), operators(name), supervisors(name), qc_executives(name), paper_types(name), coatings(name)'
+  'id, entry_no, status, production_date, order_no, cso_no, order_key, job_name, job_type, machine_id, shift, print_side, ups, unit_colours, machine_speed, total_sheets, ok_sheets, separate_sheets, wastage_sheets, make_ready_minutes, make_ready_net_minutes, registration_minutes, registration_net_minutes, colour_matching_minutes, colour_matching_net_minutes, changeover_gross_minutes, changeover_net_minutes, run_minutes, run_net_minutes, man_minutes, machine_minutes, material_minutes, other_minutes, remarks, machines(code), operators(name), supervisors(name), qc_executives(name), paper_types(name), coatings(name)'
 
 interface Named {
   id: string
@@ -83,15 +86,25 @@ const GROUPS: { key: GroupBy; label: string }[] = [
   { key: 'day', label: 'Daily' },
   { key: 'week', label: 'Weekly' },
   { key: 'month', label: 'Monthly' },
-  { key: 'order', label: 'Order-wise' },
+  { key: 'order', label: 'Production Order-wise' },
   { key: 'operator', label: 'Operator-wise' },
   { key: 'shift', label: 'Shift-wise' },
   { key: 'wastage', label: 'Wastage by reason' },
-  { key: 'downtime', label: 'Downtime by reason (BDT / ODT)' },
+  { key: 'downtime', label: 'Downtime by reason' },
 ]
 
 const sum = (rows: LogRow[], pick: (r: LogRow) => number | null | undefined) => rows.reduce((s, r) => s + (pick(r) ?? 0), 0)
 const mins = (m: number | null | undefined) => (m == null ? '—' : formatDuration(m))
+const downOf = (r: LogRow) => (r.man_minutes ?? 0) + (r.machine_minutes ?? 0) + (r.material_minutes ?? 0) + (r.other_minutes ?? 0)
+// Downtime of a set of entries: the total and its split by Man / Machine / Material / Others.
+const downtimeSums = (rows: LogRow[]) => ({
+  down: sum(rows, downOf),
+  man: sum(rows, (r) => r.man_minutes),
+  machine: sum(rows, (r) => r.machine_minutes),
+  material: sum(rows, (r) => r.material_minutes),
+  others: sum(rows, (r) => r.other_minutes),
+})
+const GROUP_ORDER = ['Man', 'Machine', 'Material', 'Others']
 
 // Monday of the week, for weekly grouping.
 function weekOf(date: string) {
@@ -174,7 +187,7 @@ export function ProductionLogPage() {
     if (filters.jobType) q = q.eq('job_type', filters.jobType)
     if (filters.paper) q = q.eq('paper_type_id', filters.paper)
     if (filters.coating) q = q.eq('coating_id', filters.coating)
-    if (query) q = q.or(`order_no.ilike.${searchPattern(query)},job_name.ilike.${searchPattern(query)}`)
+    if (query) q = q.or(`order_no.ilike.${searchPattern(query)},cso_no.ilike.${searchPattern(query)},job_name.ilike.${searchPattern(query)}`)
     q.then(({ data, error }) => {
       if (!alive) return
       if (error) setLoadError(friendlyError(error))
@@ -228,9 +241,10 @@ export function ProductionLogPage() {
           if (!alive) return
           if (error) return notify('error', friendlyError(error))
           const map = new Map<string, DowntimeGroup>()
-          for (const d of (data ?? []) as { kind: string; reason: string | null; entry_id: string | null; minutes: number; counted_minutes: number }[]) {
-            const key = `${d.kind}|${d.reason ?? 'No reason'}`
-            const g = map.get(key) ?? { kind: d.kind, reason: d.reason ?? 'No reason', events: 0, inJob: 0, between: 0, minutes: 0, counted: 0 }
+          for (const d of (data ?? []) as { kind: string | null; reason: string | null; entry_id: string | null; minutes: number; counted_minutes: number }[]) {
+            const kind = d.kind ?? 'Others'
+            const key = `${kind}|${d.reason ?? 'No reason'}`
+            const g = map.get(key) ?? { kind, reason: d.reason ?? 'No reason', events: 0, inJob: 0, between: 0, minutes: 0, counted: 0 }
             g.events++
             if (d.entry_id) g.inJob++
             else g.between++
@@ -238,7 +252,7 @@ export function ProductionLogPage() {
             g.counted += d.counted_minutes
             map.set(key, g)
           }
-          setExtra((x) => ({ ...x, downtime: [...map.values()].sort((a, b) => a.kind.localeCompare(b.kind) || b.counted - a.counted) }))
+          setExtra((x) => ({ ...x, downtime: [...map.values()].sort((a, b) => GROUP_ORDER.indexOf(a.kind) - GROUP_ORDER.indexOf(b.kind) || b.counted - a.counted) }))
         })
     }
     return () => {
@@ -267,8 +281,7 @@ export function ProductionLogPage() {
       runNet: sum(rows, (r) => r.run_net_minutes),
       coGross: sum(rows, (r) => r.changeover_gross_minutes),
       coNet: sum(rows, (r) => r.changeover_net_minutes),
-      bdt: sum(rows, (r) => r.bdt_minutes),
-      odt: sum(rows, (r) => r.odt_minutes),
+      ...downtimeSums(rows),
     }
   }, [rows])
 
@@ -317,8 +330,7 @@ export function ProductionLogPage() {
         coNet: sum(g.rows, (r) => r.changeover_net_minutes),
         runGross: sum(g.rows, (r) => r.run_minutes),
         runNet: sum(g.rows, (r) => r.run_net_minutes),
-        bdt: sum(g.rows, (r) => r.bdt_minutes),
-        odt: sum(g.rows, (r) => r.odt_minutes),
+        ...downtimeSums(g.rows),
       }
     })
     const dated = group === 'day' || group === 'week' || group === 'month'
@@ -329,20 +341,21 @@ export function ProductionLogPage() {
   const entryTable = (): ExportTable => ({
     name: 'Production Log',
     headers: [
-      'S.No', 'Entry ID', 'Date', 'Order Number', 'Job Name', 'Machine', 'Shift', 'Operator', 'Supervisor', 'QC Executive',
+      'S.No', 'Entry ID', 'Date', 'Production Order Number', 'CSO Number', 'Job Name', 'Machine', 'Shift', 'Operator', 'Supervisor', 'QC Executive',
       'Print Side', 'UPS', 'Paper Type', 'Unit 1', 'Unit 2', 'Unit 3', 'Unit 4', 'Unit 5', 'Unit 6', 'Unit 7', 'Coating',
       'Machine Speed', 'Total Given', 'OK Sheets', 'Separate Sheets', 'Wastage Sheets',
-      'Make Ready (min)', 'Make Ready net', 'Registration (min)', 'Registration net', 'Colour Matching (min)', 'Colour Matching net',
-      'Changeover gross', 'Changeover net', 'Production (min)', 'Production net', 'BDT (min)', 'ODT (min)', 'Remarks',
+      'Job Changeover (min)', 'Job Changeover net', 'Registration (min)', 'Registration net', 'Colour Matching (min)', 'Colour Matching net',
+      'Changeover gross', 'Changeover net', 'Production (min)', 'Production net',
+      'Downtime (min)', 'Man (min)', 'Machine (min)', 'Material (min)', 'Others (min)', 'Remarks',
     ],
     rows: rows.map((r, i) => [
-      i + 1, entryLabel(r.entry_no), formatDate(r.production_date), r.order_no, r.job_name, r.machines?.code, r.shift,
+      i + 1, entryLabel(r.entry_no), formatDate(r.production_date), r.order_no, r.cso_no, r.job_name, r.machines?.code, r.shift,
       r.operators?.name, r.supervisors?.name, r.qc_executives?.name, r.print_side, r.ups, r.paper_types?.name,
       ...Array.from({ length: 7 }, (_, u) => r.unit_colours?.[u] ?? ''), r.coatings?.name,
       r.machine_speed, r.total_sheets, r.ok_sheets, r.separate_sheets, r.wastage_sheets,
       r.make_ready_minutes, r.make_ready_net_minutes, r.registration_minutes, r.registration_net_minutes,
       r.colour_matching_minutes, r.colour_matching_net_minutes, r.changeover_gross_minutes, r.changeover_net_minutes,
-      r.run_minutes, r.run_net_minutes, r.bdt_minutes, r.odt_minutes, r.remarks,
+      r.run_minutes, r.run_net_minutes, downOf(r), r.man_minutes, r.machine_minutes, r.material_minutes, r.other_minutes, r.remarks,
     ] as CellValue[]),
   })
 
@@ -367,10 +380,12 @@ export function ProductionLogPage() {
       name: label,
       headers: [
         label.replace('-wise', ''), 'Entries', 'Jobs', 'Total Given', 'OK Sheets', 'Wastage', 'Quality %', 'Wastage %',
-        'Changeover gross (min)', 'Changeover net (min)', 'Production gross (min)', 'Production net (min)', 'BDT (min)', 'ODT (min)',
+        'Changeover gross (min)', 'Changeover net (min)', 'Production gross (min)', 'Production net (min)',
+        'Downtime (min)', 'Man (min)', 'Machine (min)', 'Material (min)', 'Others (min)',
       ],
       rows: grouped.map((g) => [
-        g.label, g.entries, g.jobs, g.given, g.ok, g.waste, g.quality, g.wastePct, g.coGross, g.coNet, g.runGross, g.runNet, g.bdt, g.odt,
+        g.label, g.entries, g.jobs, g.given, g.ok, g.waste, g.quality, g.wastePct, g.coGross, g.coNet, g.runGross, g.runNet,
+        g.down, g.man, g.machine, g.material, g.others,
       ]),
     }
   }
@@ -433,7 +448,7 @@ export function ProductionLogPage() {
                 setTyped(e.target.value)
                 setPage(1)
               }}
-              placeholder="Search Order Number or Job Name"
+              placeholder="Search Production Order, CSO Number or Job Name"
               aria-label="Search"
             />
           </label>
@@ -513,8 +528,11 @@ export function ProductionLogPage() {
         <Metric label="Total Wastage Sheets" value={formatNumber(totals.waste)} hint={totals.given ? `${percent(totals.waste, totals.given)}% of given` : ''} />
         <Metric label="Production Time" value={mins(totals.runNet)} hint={`Net · gross ${mins(totals.runGross)}`} />
         <Metric label="Changeover Time" value={mins(totals.coNet)} hint={`Net · gross ${mins(totals.coGross)}`} />
-        <Metric label="BDT (during these jobs)" value={mins(totals.bdt)} />
-        <Metric label="ODT (during these jobs)" value={mins(totals.odt)} />
+        <Metric
+          label="Downtime (during these jobs)"
+          value={mins(totals.down)}
+          hint={`Man ${mins(totals.man)} · Machine ${mins(totals.machine)} · Material ${mins(totals.material)} · Others ${mins(totals.others)}`}
+        />
       </div>
 
       <div className="section-tabs no-print" role="tablist">
@@ -533,9 +551,9 @@ export function ProductionLogPage() {
               <thead>
                 <tr>
                   {[
-                    'S.No', 'Entry', 'Date', 'Order No', 'Job Name', 'Machine', 'Shift', 'Operator', 'Supervisor', 'QC', 'Side', 'UPS', 'Paper',
+                    'S.No', 'Entry', 'Date', 'Prod. Order No', 'CSO No', 'Job Name', 'Machine', 'Shift', 'Operator', 'Supervisor', 'QC', 'Side', 'UPS', 'Paper',
                     'U1', 'U2', 'U3', 'U4', 'U5', 'U6', 'U7', 'Coating', 'Speed', 'Given', 'OK', 'Separate', 'Wastage',
-                    'Make Ready', 'Registration', 'Colour Matching', 'Production', 'BDT', 'ODT', 'Remarks',
+                    'Job Changeover', 'Registration', 'Colour Matching', 'Production', 'Downtime', 'Remarks',
                   ].map((h) => (
                     <th key={h}>{h}</th>
                   ))}
@@ -563,6 +581,7 @@ export function ProductionLogPage() {
                       <td>
                         <b>{r.order_no}</b>
                       </td>
+                      <td>{r.cso_no}</td>
                       <td className="wrap">{r.job_name}</td>
                       <td>{r.machines?.code}</td>
                       <td>{r.shift}</td>
@@ -593,8 +612,9 @@ export function ProductionLogPage() {
                       <td>
                         <GrossNet gross={r.run_minutes} net={r.run_net_minutes} />
                       </td>
-                      <td>{r.bdt_minutes ? mins(r.bdt_minutes) : ''}</td>
-                      <td>{r.odt_minutes ? mins(r.odt_minutes) : ''}</td>
+                      <td>
+                        <DowntimeSplit row={r} />
+                      </td>
                       <td className="wrap">{r.remarks}</td>
                     </tr>
                   ))
@@ -633,7 +653,7 @@ export function ProductionLogPage() {
           </div>
           {group === 'downtime' && (
             <p className="notice info">
-              All BDT and ODT of the period (during jobs and between jobs), filtered by date and machine. "Counted" leaves out
+              All downtime of the period (during jobs and between jobs) by type and reason, filtered by date and machine. "Counted" leaves out
               downtime in the overnight window (B-shift end to 8:00 AM).
             </p>
           )}
@@ -663,6 +683,24 @@ function Metric({ label, value, hint }: { label: string; value: string; hint?: s
       <strong className="metric-value">{value}</strong>
       {hint && <span className="metric-hint">{hint}</span>}
     </div>
+  )
+}
+
+function DowntimeSplit({ row }: { row: LogRow }) {
+  const total = downOf(row)
+  if (!total) return null
+  const parts = (
+    [
+      ['Man', row.man_minutes],
+      ['Machine', row.machine_minutes],
+      ['Material', row.material_minutes],
+      ['Others', row.other_minutes],
+    ] as const
+  ).filter(([, m]) => m > 0)
+  return (
+    <>
+      {mins(total)} <span className="muted small">({parts.map(([g, m]) => `${g} ${mins(m)}`).join(', ')})</span>
+    </>
   )
 }
 

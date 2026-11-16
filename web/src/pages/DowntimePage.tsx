@@ -1,60 +1,51 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { FormEvent } from 'react'
-import { Link, useLocation } from 'react-router-dom'
+import { Link } from 'react-router-dom'
 import { Pencil, Plus, Trash2 } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../lib/auth'
 import { friendlyError } from '../lib/errors'
 import { formatDate } from '../lib/jobs'
-import { entryLabel, formatDuration, formatMoment, isoToStamp, nowStamp, spanMinutes, stampToIso } from '../lib/production'
-import type { Span } from '../lib/production'
-import type { Machine, Resource } from '../lib/types'
+import { DOWNTIME_GROUPS, entryLabel, formatDuration, formatMoment, isoToStamp, nowStamp, spanMinutes, stampToIso } from '../lib/production'
+import type { DowntimeGroup, Span } from '../lib/production'
+import type { Machine } from '../lib/types'
 import { TimeCard } from '../components/TimeCard'
 import { ConfirmDialog, Modal } from '../components/Modal'
 import { useToast } from '../components/Toast'
+import { DowntimeReasonPicker } from '../components/DowntimeReasons'
+import { useDowntimeReasons } from '../lib/downtime'
 
 const PAGE_SIZE = 15
-type Kind = 'BDT' | 'ODT'
 
 interface EventRow {
   id: string
-  kind: Kind
+  kind: DowntimeGroup | null
   machine_id: string
   entry_id: string | null
   start_at: string | null
   end_at: string | null
   minutes: number | null
-  bdt_reason_id: string | null
-  odt_reason_id: string | null
+  reason_id: string | null
   remarks: string | null
   production_date: string | null
   shift: string | null
   updated_at: string
   machines: { code: string } | null
-  bdt_reasons: { name: string } | null
-  odt_reasons: { name: string } | null
+  downtime_reasons: { name: string; category: DowntimeGroup } | null
   production_entries: { id: string; entry_no: number; order_no: string | null } | null
 }
 
 const COLUMNS =
-  'id, kind, machine_id, entry_id, start_at, end_at, minutes, bdt_reason_id, odt_reason_id, remarks, production_date, shift, updated_at, machines(code), bdt_reasons(name), odt_reasons(name), production_entries(id, entry_no, order_no)'
+  'id, kind, machine_id, entry_id, start_at, end_at, minutes, reason_id, remarks, production_date, shift, updated_at, machines(code), downtime_reasons(name, category), production_entries(id, entry_no, order_no)'
 
-// /production/bdt and /production/odt: every breakdown / other-downtime record.
+// /production/downtime: every downtime record (Man, Machine, Material, Others).
 // Downtime between jobs is recorded here; downtime during a job belongs to its entry.
 export function DowntimePage() {
-  const { pathname } = useLocation()
-  const kind: Kind = pathname.endsWith('/odt') ? 'ODT' : 'BDT'
-  return <DowntimeList key={kind} kind={kind} />
-}
-
-function DowntimeList({ kind }: { kind: Kind }) {
   const { can } = useAuth()
   const notify = useToast()
-  const res: Resource = kind === 'BDT' ? 'bdt' : 'odt'
-  const canCreate = can(res, 'create')
-  const canEdit = can(res, 'edit')
-  const canDelete = can(res, 'delete')
-  const title = kind === 'BDT' ? 'BDT – Breakdown Time' : 'ODT – Other Downtime'
+  const canCreate = can('downtime', 'create')
+  const canEdit = can('downtime', 'edit')
+  const canDelete = can('downtime', 'delete')
 
   const [rows, setRows] = useState<EventRow[]>([])
   const [total, setTotal] = useState(0)
@@ -62,7 +53,7 @@ function DowntimeList({ kind }: { kind: Kind }) {
   const [loadError, setLoadError] = useState('')
   const [page, setPage] = useState(1)
   const [reload, setReload] = useState(0)
-  const [filters, setFilters] = useState({ machine: '', scope: '', from: '', to: '' })
+  const [filters, setFilters] = useState({ machine: '', group: '', scope: '', from: '', to: '' })
   const [machines, setMachines] = useState<Machine[]>([])
   const [editing, setEditing] = useState<EventRow | 'new' | null>(null)
   const [deleting, setDeleting] = useState<EventRow | null>(null)
@@ -85,10 +76,10 @@ function DowntimeList({ kind }: { kind: Kind }) {
     let q = supabase
       .from('downtime_events')
       .select(COLUMNS, { count: 'exact' })
-      .eq('kind', kind)
       .order('start_at', { ascending: false, nullsFirst: false })
       .range((page - 1) * PAGE_SIZE, page * PAGE_SIZE - 1)
     if (filters.machine) q = q.eq('machine_id', filters.machine)
+    if (filters.group) q = q.eq('kind', filters.group)
     if (filters.scope === 'between') q = q.is('entry_id', null)
     if (filters.scope === 'job') q = q.not('entry_id', 'is', null)
     if (filters.from) q = q.gte('production_date', filters.from)
@@ -106,7 +97,7 @@ function DowntimeList({ kind }: { kind: Kind }) {
     return () => {
       alive = false
     }
-  }, [kind, page, filters, reload, rangeError])
+  }, [page, filters, reload, rangeError])
 
   const setFilter = (key: keyof typeof filters, value: string) => {
     setFilters((f) => ({ ...f, [key]: value }))
@@ -123,25 +114,25 @@ function DowntimeList({ kind }: { kind: Kind }) {
     if (error) notify('error', friendlyError(error, 'record'))
     else if (!data?.length) notify('error', 'You do not have permission to delete this record.')
     else {
-      notify('success', `${kind} record deleted.`)
+      notify('success', 'Downtime record deleted.')
       setReload((n) => n + 1)
     }
   }
 
-  const headers = ['S.No', 'Date', 'Shift', 'Machine', 'Start', 'End', 'Duration', 'Reason', 'Job', 'Remarks', '']
+  const headers = ['S.No', 'Date', 'Shift', 'Machine', 'Start', 'End', 'Duration', 'Type', 'Reason', 'Job', 'Remarks', '']
 
   return (
     <>
       <div className="pagehead">
         <div>
-          <h1>{title}</h1>
+          <h1>Downtime</h1>
           <p className="muted">
             Downtime between jobs is recorded here. Downtime during a job is recorded in that job's Production Entry.
           </p>
         </div>
         {canCreate && (
           <button type="button" className="primary" onClick={() => setEditing('new')}>
-            <Plus size={18} /> Record {kind} between jobs
+            <Plus size={18} /> Record downtime between jobs
           </button>
         )}
       </div>
@@ -153,6 +144,14 @@ function DowntimeList({ kind }: { kind: Kind }) {
             {machines.map((m) => (
               <option key={m.id} value={m.id}>
                 {m.code}
+              </option>
+            ))}
+          </select>
+          <select value={filters.group} onChange={(e) => setFilter('group', e.target.value)} aria-label="Type filter">
+            <option value="">All types</option>
+            {DOWNTIME_GROUPS.map((g) => (
+              <option key={g} value={g}>
+                {g}
               </option>
             ))}
           </select>
@@ -191,7 +190,7 @@ function DowntimeList({ kind }: { kind: Kind }) {
               ) : rows.length === 0 ? (
                 <tr>
                   <td colSpan={headers.length} className="empty">
-                    No {kind} records.
+                    No downtime records.
                   </td>
                 </tr>
               ) : (
@@ -206,7 +205,8 @@ function DowntimeList({ kind }: { kind: Kind }) {
                       <td>{formatMoment(r.start_at)}</td>
                       <td>{r.end_at ? formatMoment(r.end_at) : <span className="badge amber">Still down</span>}</td>
                       <td>{formatDuration(r.minutes)}</td>
-                      <td>{r.bdt_reasons?.name ?? r.odt_reasons?.name}</td>
+                      <td>{r.kind ?? r.downtime_reasons?.category}</td>
+                      <td>{r.downtime_reasons?.name}</td>
                       <td>
                         {between ? (
                           <span className="muted">Between jobs</span>
@@ -256,18 +256,17 @@ function DowntimeList({ kind }: { kind: Kind }) {
           </div>
         </div>
         <p className="muted small">
-          Downtime between jobs moves the machine's ready time: the next job's Make Ready starts when it ends.
+          Downtime between jobs moves the machine's ready time: the next job's Job Changeover starts when it ends.
         </p>
       </section>
 
       {editing && (
         <OutsideForm
-          kind={kind}
           row={editing === 'new' ? null : editing}
           machines={machines}
           onClose={() => setEditing(null)}
           onSaved={() => {
-            notify('success', `${kind} saved.`)
+            notify('success', 'Downtime saved.')
             setEditing(null)
             setReload((n) => n + 1)
           }}
@@ -275,7 +274,7 @@ function DowntimeList({ kind }: { kind: Kind }) {
       )}
       {deleting && (
         <ConfirmDialog
-          title={`Delete this ${kind} record?`}
+          title="Delete this downtime record?"
           message={`${deleting.machines?.code} · ${formatMoment(deleting.start_at)}. It will be removed permanently.`}
           confirmLabel="Delete"
           danger
@@ -289,39 +288,25 @@ function DowntimeList({ kind }: { kind: Kind }) {
 }
 
 interface FormProps {
-  kind: Kind
   row: EventRow | null
   machines: Machine[]
   onClose: () => void
   onSaved: () => void
 }
 
-interface Option {
-  id: string
-  name: string
-  active: boolean
-}
-
-function OutsideForm({ kind, row, machines, onClose, onSaved }: FormProps) {
+function OutsideForm({ row, machines, onClose, onSaved }: FormProps) {
   const { profile } = useAuth()
   const [machineId, setMachineId] = useState(row?.machine_id ?? '')
   const [span, setSpan] = useState<Span>(() =>
     row ? { start: isoToStamp(row.start_at), end: isoToStamp(row.end_at) } : { start: nowStamp(), end: { date: '', time: '' } },
   )
-  const [reasonId, setReasonId] = useState((kind === 'BDT' ? row?.bdt_reason_id : row?.odt_reason_id) ?? '')
+  const [reasonId, setReasonId] = useState(row?.reason_id ?? '')
   const [remarks, setRemarks] = useState(row?.remarks ?? '')
-  const [reasons, setReasons] = useState<Option[]>([])
+  const reasons = useDowntimeReasons()
   const [myMachines, setMyMachines] = useState<string[] | null>(null)
   const [errors, setErrors] = useState<string[]>([])
   const [busy, setBusy] = useState(false)
 
-  useEffect(() => {
-    supabase
-      .from(kind === 'BDT' ? 'bdt_reasons' : 'odt_reasons')
-      .select('id, name, active')
-      .order('name')
-      .then(({ data }) => setReasons((data ?? []) as Option[]))
-  }, [kind])
   useEffect(() => {
     if (!profile || profile.role === 'super_admin' || profile.all_machines) return
     supabase
@@ -344,14 +329,13 @@ function OutsideForm({ kind, row, machines, onClose, onSaved }: FormProps) {
     if (!span.start.date || !span.start.time) problems.push('Enter the Start date and time.')
     if (Boolean(span.end.date) !== Boolean(span.end.time)) problems.push('Enter both the End date and time, or leave both empty.')
     if (minutes !== null && minutes < 0) problems.push('End is before Start.')
-    if (!reasonId) problems.push('Select a reason.')
+    if (!reasonId) problems.push('Select a downtime reason.')
     if (problems.length) return setErrors(problems)
     setBusy(true)
     setErrors([])
     const { data, error } = await supabase.rpc('save_outside_downtime', {
       p_id: row?.id ?? null,
       p_event: {
-        kind,
         machine_id: machineId,
         start_at: stampToIso(span.start),
         end_at: stampToIso(span.end),
@@ -369,9 +353,9 @@ function OutsideForm({ kind, row, machines, onClose, onSaved }: FormProps) {
 
   return (
     <Modal
-      title={`${row ? 'Edit' : 'Record'} ${kind} between jobs`}
+      title={`${row ? 'Edit' : 'Record'} downtime between jobs`}
       onClose={onClose}
-      width={640}
+      width={760}
       footer={
         <>
           <button type="button" onClick={onClose} disabled={busy}>
@@ -396,21 +380,12 @@ function OutsideForm({ kind, row, machines, onClose, onSaved }: FormProps) {
               ))}
             </select>
           </label>
-          <label className="field">
-            <span>Reason *</span>
-            <select value={reasonId} onChange={(e) => setReasonId(e.target.value)}>
-              <option value="">{reasons.length ? 'Select…' : `No ${kind} reasons yet: add them under Master`}</option>
-              {reasons
-                .filter((r) => r.active || r.id === reasonId)
-                .map((r) => (
-                  <option key={r.id} value={r.id}>
-                    {r.name}
-                  </option>
-                ))}
-            </select>
-          </label>
         </div>
-        <TimeCard title={`${kind} time`} span={span} onChange={setSpan} />
+        <div className="field">
+          <span>Reason * (click one)</span>
+          <DowntimeReasonPicker reasons={reasons} value={reasonId} onChange={setReasonId} />
+        </div>
+        <TimeCard title="Downtime" span={span} onChange={setSpan} />
         <p className="muted small">Leave End empty while the machine is still down, and fill it in when it is working again.</p>
         <label className="field">
           <span>Remarks</span>

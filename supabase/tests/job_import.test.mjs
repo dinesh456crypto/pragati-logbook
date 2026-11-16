@@ -41,9 +41,10 @@ console.log('All migrations applied.')
 await as(S, "select public.admin_save_user($1,'viewer','Viewer','office_user',true,true,'{}',$2::jsonb)", [V, JSON.stringify([{ resource: 'production_plan', view: true }])])
 const paper = (await db.query("insert into public.paper_types (name) values ('CFBB') returning id")).rows[0].id
 await db.query("insert into public.paper_types (name, active) values ('Old Board', false)")
+const coat = (await db.query("insert into public.coatings (name) values ('UV') returning id")).rows[0].id
 
 // ---- Category required in the form ----------------------------------------------
-const job = (over = {}) => ({ plan_date: '2026-11-16', order_no: 'PO-1', job_name: 'Box', category: 'Carton', ups: 4, job_type: 'NEW', paper_type_id: paper, quantity: 1000, ...over })
+const job = (over = {}) => ({ plan_date: '2026-11-16', order_no: 'PO-1', job_name: 'Box', category: 'Carton', ups: 4, job_type: 'NEW', paper_type_id: paper, quantity: 1000, cso_no: 'CSO-1', coating_id: coat, ...over })
 let r = await as(S, 'select public.save_production_job(null,$1::jsonb,$2::jsonb) r', [JSON.stringify(job({ category: '  ' })), JSON.stringify([{ print_side: 'O/S', colours: ['C'] }])])
 ok('form: category required', r.rows?.[0]?.r?.errors?.some((e) => e.field === 'category' && /required/.test(e.message)), r)
 r = await as(S, 'select public.save_production_job(null,$1::jsonb,$2::jsonb) r', [JSON.stringify(job()), JSON.stringify([{ print_side: 'O/S', colours: ['C'] }])])
@@ -51,7 +52,7 @@ ok('form: job with category saved', r.rows?.[0]?.r?.ok, r)
 
 // ---- Bulk import -------------------------------------------------------------------
 const row = (n, over = {}) => ({ row: n, plan_date: '2026-11-16', order_no: `PO-${100 + n}`, job_name: `Job ${n}`, category: 'Carton', ups: '6', job_type: 'NEW',
-  paper_type: 'cfbb', quantity: '12000', print_side: 'O/S', colours: 'C, M, Y, K', bs_colours: '', ...over })
+  paper_type: 'cfbb', cso_no: 'CSO-7', coating: 'uv', quantity: '12000', print_side: 'O/S', colours: 'C, M, Y, K', bs_colours: '', ...over })
 const imp = async (user, rows) => {
   const res = await as(user, 'select public.import_production_jobs($1::jsonb) r', [JSON.stringify(rows)])
   return res.error ? res : res.rows[0].r

@@ -13,6 +13,7 @@ import {
   SECTIONS,
   UNIT_COUNT,
   applyAutoStarts,
+  autoChanges,
   autoStartOf,
   changeoverRequired,
   changeoverTotals,
@@ -50,6 +51,9 @@ import type {
 import type { Machine } from '../lib/types'
 import { plantDate } from '../lib/dates'
 import { OrderPicker } from '../components/OrderPicker'
+import { ScanButton } from '../components/ScanButton'
+import { DowntimeReasonPicker } from '../components/DowntimeReasons'
+import { reasonGroup, useDowntimeReasons } from '../lib/downtime'
 import { TimeCard } from '../components/TimeCard'
 import { Modal } from '../components/Modal'
 import { useToast } from '../components/Toast'
@@ -155,8 +159,7 @@ function EntryEditor({ entryId }: { entryId: string | null }) {
   const coatings = useOptions('coatings')
   const papers = useOptions('paper_types')
   const reasons = useOptions('wastage_reasons')
-  const bdtReasons = useOptions('bdt_reasons')
-  const odtReasons = useOptions('odt_reasons')
+  const downtimeReasons = useDowntimeReasons()
   const [timeline, setTimeline] = useState<Timeline | null>(null)
   // Latest order status, for rules applied inside state updates.
   const statusRef = useRef<OrderStatus | null>(null)
@@ -263,7 +266,7 @@ function EntryEditor({ entryId }: { entryId: string | null }) {
       supabase.from('production_entry_wastage').select('quantity, reason_id').eq('entry_id', entryId).order('line'),
       supabase
         .from('downtime_events')
-        .select('kind, start_at, end_at, bdt_reason_id, odt_reason_id, remarks')
+        .select('start_at, end_at, reason_id, remarks')
         .eq('entry_id', entryId)
         .order('line'),
     ]).then(async ([entry, wastage, downtime]) => {
@@ -362,6 +365,9 @@ function EntryEditor({ entryId }: { entryId: string | null }) {
           job_type: job.job_type ?? '',
           paper_type_id: job.paper_type_id ?? '',
           planned_quantity: job.quantity == null ? '' : String(job.quantity),
+          // A planned order's CSO Number and Coating come from Production Plan (locked).
+          cso_no: job.cso_no ?? (s.job ? '' : cur.cso_no),
+          coating_id: job.coating_id ?? (s.job ? '' : cur.coating_id),
           // A planned order with a single print side: select it straight away.
           print_side: s.job && planned.length === 1 ? planned[0] : s.job && !planned.includes(cur.print_side) ? '' : cur.print_side,
         }
@@ -432,6 +438,13 @@ function EntryEditor({ entryId }: { entryId: string | null }) {
   const totals = changeoverTotals(st)
   const runTimes = stepTimes(st, 'run')
   const plannedJob = status?.job ?? null
+  const coatingLocked = Boolean(plannedJob?.coating_id)
+  const csoLocked = Boolean(plannedJob?.cso_no)
+  // Worked out from the previous completed job on this machine; a submitted entry shows what was saved.
+  const changes = autoChanges(st.unit_colours, st.coating_id, timeline?.previous ?? null)
+  const shownColourChanges = meta.status === 'submitted' ? st.colour_changes : String(changes.colourChanges)
+  const shownCoatingChanged =
+    meta.status === 'submitted' ? st.coating_changed : changes.coatingChanged === null ? '' : changes.coatingChanged ? 'yes' : 'no'
   const plannedSides = plannedJob?.sides.map((x) => x.print_side) ?? []
   const wasteTotal = wastageTotal(st.wastage)
   const total = Number(st.total_sheets) || 0
@@ -592,7 +605,7 @@ function EntryEditor({ entryId }: { entryId: string | null }) {
   const sideNotice = (() => {
     if (!st.order_no || !st.print_side || !status) return null
     if (status.fully_closed && !(meta.status === 'submitted')) {
-      return <p className="notice error">Order {st.order_no} is fully closed. No more entries can be added.</p>
+      return <p className="notice error">Production order {st.order_no} is fully closed. No more entries can be added.</p>
     }
     const pairOf: Record<string, string> = { 'F/S': 'B/S', 'B/S': 'F/S', 'B/B F': 'B/B B', 'B/B B': 'B/B F' }
     const lines: string[] = []
@@ -633,8 +646,20 @@ function EntryEditor({ entryId }: { entryId: string | null }) {
           <option value="B">B (from 4:30 PM)</option>
         </select>
       </Field>
-      <Field label="Order Number *" error={errorOf('order_no')} wide>
-        <OrderPicker value={st.order_no} options={orders} disabled={readOnly} invalid={Boolean(errorOf('order_no'))} onSelect={chooseOrder} />
+      <Field label="Production Order Number *" error={errorOf('order_no')} wide>
+        <div className="with-scan">
+          <OrderPicker value={st.order_no} options={orders} disabled={readOnly} invalid={Boolean(errorOf('order_no'))} onSelect={chooseOrder} />
+          <ScanButton disabled={readOnly} onScan={(text) => chooseOrder(text.slice(0, 60))} />
+        </div>
+      </Field>
+      <Field label="CSO Number *" error={errorOf('cso_no')}>
+        <input
+          value={st.cso_no}
+          maxLength={60}
+          disabled={readOnly || csoLocked}
+          onChange={(e) => update({ cso_no: e.target.value })}
+        />
+        {csoLocked && <span className="hint">From Production Plan</span>}
       </Field>
       <Field label="Job Name *" error={errorOf('job_name')} wide>
         <input value={st.job_name} maxLength={150} disabled={readOnly} onChange={(e) => update({ job_name: e.target.value })} />
@@ -700,10 +725,10 @@ function EntryEditor({ entryId }: { entryId: string | null }) {
         {!lookupBusy && st.order_no && status && (
           <p className="notice info">
             {status.job
-              ? `Planned order: details filled in from Production Plan (${formatNumber(status.job.quantity)} sheets planned).`
+              ? `Planned production order: details filled in from Production Plan (${formatNumber(status.job.quantity)} sheets planned).`
               : status.last_entry_job
-                ? 'Not in Production Plan: details filled in from the last entry for this order.'
-                : 'New order, not in Production Plan: enter the job details and colours yourself.'}
+                ? 'Not in Production Plan: details filled in from the last entry for this production order.'
+                : 'New production order, not in Production Plan: enter the job details, CSO Number, coating and colours yourself.'}
             {status.sides && status.sides.length > 0 &&
               ` Produced so far: ${status.sides.map((s) => `${s.side} ${formatNumber(s.ok_sheets ?? 0)} OK${s.closed ? ' (closed)' : ''}`).join(' · ')}.`}
             {' '}Changes here do not change the Production Plan.
@@ -753,7 +778,7 @@ function EntryEditor({ entryId }: { entryId: string | null }) {
       ) : plannedJob ? (
         <div className="colour-set">
           <p className="smallcaps">
-            Planned colours for {st.print_side} · order {st.order_no} (from Production Plan)
+            Planned colours for {st.print_side} · production order {st.order_no} (from Production Plan)
           </p>
           {planned.length ? (
             <div className="chips">
@@ -828,31 +853,32 @@ function EntryEditor({ entryId }: { entryId: string | null }) {
       {errorOf('unit_colours') && <p className="field-error">{errorOf('unit_colours')}</p>}
       <div className="form-grid">
         <Field label="Coating *" error={errorOf('coating_id')}>
-          <MasterSelect rows={coatings} value={st.coating_id} disabled={readOnly} onChange={(v) => update({ coating_id: v })} />
+          <MasterSelect rows={coatings} value={st.coating_id} disabled={readOnly || coatingLocked} onChange={(v) => update({ coating_id: v })} />
+          {coatingLocked && <span className="hint">From Production Plan</span>}
         </Field>
-        <Field label="No. of Colour Changes *" error={errorOf('colour_changes')}>
-          <select value={st.colour_changes} disabled={readOnly} onChange={(e) => update({ colour_changes: e.target.value })}>
-            <option value="">Select…</option>
-            {Array.from({ length: 8 }, (_, n) => (
-              <option key={n}>{n}</option>
-            ))}
-          </select>
+        <Field label="No. of Colour Changes (automatic)" error={errorOf('colour_changes')}>
+          <input value={shownColourChanges} readOnly disabled aria-readonly="true" />
         </Field>
-        <Field label="Coating Changed? *" error={errorOf('coating_changed')}>
-          <select value={st.coating_changed} disabled={readOnly} onChange={(e) => update({ coating_changed: e.target.value })}>
-            <option value="">Select…</option>
-            <option value="yes">Yes</option>
-            <option value="no">No</option>
-          </select>
+        <Field label="Coating Changed? (automatic)" error={errorOf('coating_changed')}>
+          <input value={shownCoatingChanged === 'yes' ? 'Yes' : shownCoatingChanged === 'no' ? 'No' : '—'} readOnly disabled aria-readonly="true" />
         </Field>
       </div>
+      {meta.status !== 'submitted' && (
+        <p className="muted small">
+          {!st.machine_id
+            ? 'Select the machine to work out the colour and coating changes.'
+            : timeline?.previous
+              ? `Compared unit by unit with the previous job on this machine (${entryLabel(timeline.previous.entry_no)}, production order ${timeline.previous.order_no ?? '—'}${timeline.previous.coating ? `, coating ${timeline.previous.coating}` : ''}). An empty unit getting a colour, or a colour removed, also counts.`
+              : 'No earlier job on this machine: every used unit counts as a colour change, and the coating counts as changed.'}
+        </p>
+      )}
     </div>,
 
     // 4. Changeover Time
     <div key="changeover" className="form-stack">
       <p className={`notice ${required ? 'warn' : 'info'}`}>
         {required
-          ? 'Changeover is required for this entry: fill in Make Ready, Registration and Colour Matching.'
+          ? 'Changeover is required for this entry: fill in Job Changeover, Registration and Colour Matching.'
           : st.print_side.startsWith('B/B')
             ? 'Changeover is optional: this is not the first B/B entry of this order. Any activity you start needs both Start and End.'
             : 'Changeover is optional for a continuing job. Any activity you start needs both Start and End.'}
@@ -891,9 +917,9 @@ function EntryEditor({ entryId }: { entryId: string | null }) {
         </div>
       </div>
       <p className="muted small">
-        Steps run one after another: Make Ready → Registration → Colour Matching → Production. Each start fills in
+        Steps run one after another: Job Changeover → Registration → Colour Matching → Production. Each start fills in
         automatically from the previous end; you can change it, and reset it to the automatic time. Net time = gross time −
-        BDT/ODT inside that step (overlapping downtime is counted once).
+        downtime inside that step (overlapping downtime is counted once).
       </p>
     </div>,
 
@@ -915,19 +941,22 @@ function EntryEditor({ entryId }: { entryId: string | null }) {
     // 6. Downtime
     <div key="downtime" className="form-stack">
       <p className="notice info">
-        Record each breakdown (BDT) or other downtime (ODT) during this job: during or between the changeover steps, or during
-        production. Downtime between two jobs is recorded under Production → BDT / ODT instead.
+        Record each downtime during this job: during or between the changeover steps, or during production. Click a reason,
+        then enter the start and end time. Downtime between two jobs is recorded under Production → Downtime instead.
       </p>
       {st.downtime.length === 0 && <p className="empty">No downtime recorded for this job.</p>}
       {st.downtime.map((d, i) => {
         const minutes = spanComplete(d.span) ? (stampMs(d.span.end)! - stampMs(d.span.start)!) / 60000 : null
         const where = downtimePlacement(st, d)
-        const reasonRows = d.kind === 'BDT' ? bdtReasons : d.kind === 'ODT' ? odtReasons : []
+        const group = reasonGroup(downtimeReasons, d.reason_id)
         const setRow = (patch: Partial<typeof d>) => update({ downtime: st.downtime.map((x, j) => (j === i ? { ...x, ...patch } : x)) })
         return (
           <div key={i} className="downtime-row">
             <div className="downtime-head">
-              <b>Downtime {i + 1}</b>
+              <b>
+                Downtime {i + 1}
+                {group ? ` · ${group}` : ''}
+              </b>
               {!readOnly && (
                 <button
                   type="button"
@@ -940,33 +969,12 @@ function EntryEditor({ entryId }: { entryId: string | null }) {
                 </button>
               )}
             </div>
-            <div className="form-grid">
-              <label className="field">
-                <span>Type *</span>
-                <select value={d.kind} disabled={readOnly} onChange={(e) => setRow({ kind: e.target.value as typeof d.kind, reason_id: '' })}>
-                  <option value="">Select…</option>
-                  <option value="BDT">BDT – Breakdown</option>
-                  <option value="ODT">ODT – Other downtime</option>
-                </select>
-              </label>
-              <label className="field">
-                <span>Reason *</span>
-                <select value={d.reason_id} disabled={readOnly || !d.kind} onChange={(e) => setRow({ reason_id: e.target.value })}>
-                  <option value="">{d.kind ? 'Select…' : 'Choose the type first'}</option>
-                  {choices(reasonRows, d.reason_id).map((r) => (
-                    <option key={r.id} value={r.id}>
-                      {r.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="field span-2">
-                <span>Remarks</span>
-                <input value={d.remarks} maxLength={500} disabled={readOnly} onChange={(e) => setRow({ remarks: e.target.value })} />
-              </label>
+            <div className="field">
+              <span>Reason * (click one)</span>
+              <DowntimeReasonPicker reasons={downtimeReasons} value={d.reason_id} disabled={readOnly} onChange={(id) => setRow({ reason_id: id })} />
             </div>
             <TimeCard
-              title={d.kind ? `${d.kind} time` : 'Downtime time'}
+              title={group ? `Downtime – ${group}` : 'Downtime'}
               span={d.span}
               disabled={readOnly}
               onChange={(span) => setRow({ span })}
@@ -976,21 +984,22 @@ function EntryEditor({ entryId }: { entryId: string | null }) {
                 <p className="warn-text small">This is outside the job's steps. Check the times.</p>
               )}
             </TimeCard>
+            <label className="field">
+              <span>Remarks</span>
+              <input value={d.remarks} maxLength={500} disabled={readOnly} onChange={(e) => setRow({ remarks: e.target.value })} />
+            </label>
           </div>
         )
       })}
       {!readOnly && (
         <div className="actions">
-          <button type="button" className="small" onClick={() => update({ downtime: [...st.downtime, { ...emptyDowntime(), kind: 'BDT' }] })}>
-            <Plus size={15} /> Add BDT
-          </button>
-          <button type="button" className="small" onClick={() => update({ downtime: [...st.downtime, { ...emptyDowntime(), kind: 'ODT' }] })}>
-            <Plus size={15} /> Add ODT
+          <button type="button" className="small" onClick={() => update({ downtime: [...st.downtime, emptyDowntime()] })}>
+            <Plus size={15} /> Add downtime
           </button>
         </div>
       )}
       {downtimeOverlaps(st.downtime) && (
-        <p className="notice warn">Two downtime rows overlap. A machine can have only one BDT or ODT at a time: change the times.</p>
+        <p className="notice warn">Two downtime rows overlap. A machine can have only one downtime at a time: change the times.</p>
       )}
       {errorOf('downtime') && <p className="field-error">{errorOf('downtime')}</p>}
       <div className="totals">
@@ -1202,10 +1211,12 @@ function EntryEditor({ entryId }: { entryId: string | null }) {
           }
         >
           <dl className="summary-list">
-            <dt>Order</dt>
+            <dt>Production Order</dt>
             <dd>
               {st.order_no || '—'} · {st.job_name || '—'}
             </dd>
+            <dt>CSO Number</dt>
+            <dd>{st.cso_no || '—'}</dd>
             <dt>Machine / Shift</dt>
             <dd>
               {machine?.code ?? '—'} · Shift {st.shift || '—'} · {formatDate(st.production_date)}
@@ -1226,7 +1237,7 @@ function EntryEditor({ entryId }: { entryId: string | null }) {
             <label className="check">
               <input type="checkbox" checked={closeSide} onChange={(e) => setCloseSide(e.target.checked)} />
               <span>
-                {st.print_side} of order {st.order_no} is finished. Close it (no more entries for this side).
+                {st.print_side} of production order {st.order_no} is finished. Close it (no more entries for this side).
               </span>
             </label>
           )}
@@ -1261,7 +1272,7 @@ function EntryEditor({ entryId }: { entryId: string | null }) {
         >
           <p>
             <b>{machines.find((m) => m.id === machineBlock.machine_id)?.code}</b> has draft <b>{entryLabel(machineBlock.entry_no)}</b>
-            {machineBlock.order_no ? ` · order ${machineBlock.order_no}` : ''}
+            {machineBlock.order_no ? ` · production order ${machineBlock.order_no}` : ''}
             {machineBlock.job_name ? ` · ${machineBlock.job_name}` : ''}
           </p>
           <p className="muted">
@@ -1300,7 +1311,7 @@ function EntryEditor({ entryId }: { entryId: string | null }) {
           }
         >
           <p>
-            <b>{entryLabel(conflict.entry_no)}</b> · {conflict.order_no || 'order not entered yet'}
+            <b>{entryLabel(conflict.entry_no)}</b> · {conflict.order_no || 'production order not entered yet'}
             {conflict.job_name ? ` · ${conflict.job_name}` : ''}
           </p>
           <p className="muted">
@@ -1375,30 +1386,30 @@ function TimelinePanel({ timeline, machineCode, submitted }: { timeline: Timelin
       <p className="smallcaps">Machine timeline · {machineCode}</p>
       {prev ? (
         <p>
-          Previous completed job: <b>{entryLabel(prev.entry_no)}</b> · order {prev.order_no} {prev.print_side ? `(${prev.print_side})` : ''} ·
+          Previous completed job: <b>{entryLabel(prev.entry_no)}</b> · production order {prev.order_no} {prev.print_side ? `(${prev.print_side})` : ''} ·
           production ended <b>{formatMoment(prev.run_end)}</b>
         </p>
       ) : (
         <p>
-          No earlier completed job on this machine. This entry starts its timeline: enter the Make Ready start yourself.
+          No earlier completed job on this machine. This entry starts its timeline: enter the Job Changeover start yourself.
         </p>
       )}
       {timeline.downtime.map((d) => (
         <p key={d.id}>
-          {d.kind} between jobs: {formatMoment(d.start_at)} – {formatMoment(d.end_at)} ({formatDuration(d.minutes)}
+          Downtime{d.kind ? ` (${d.kind})` : ''} between jobs: {formatMoment(d.start_at)} – {formatMoment(d.end_at)} ({formatDuration(d.minutes)}
           {d.reason ? `, ${d.reason}` : ''})
         </p>
       ))}
       {timeline.ready_at && (
         <p>
           Machine ready from <b>{formatMoment(timeline.ready_at)}</b>
-          {submitted ? '' : ' → used as the Make Ready start'}
+          {submitted ? '' : ' → used as the Job Changeover start'}
         </p>
       )}
       {timeline.open_downtime.map((d) => (
         <p key={d.id} className="warn-text">
-          Open {d.kind} since {formatMoment(d.start_at)}: the machine is still recorded as down. Close it under Production →{' '}
-          {d.kind === 'BDT' ? 'BDT' : 'ODT'}.
+          Open downtime{d.kind ? ` (${d.kind})` : ''} since {formatMoment(d.start_at)}: the machine is still recorded as down.
+          Close it under Production → Downtime.
         </p>
       ))}
     </div>

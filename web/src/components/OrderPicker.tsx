@@ -14,7 +14,8 @@ interface Props {
   onSelect: (orderNo: string) => void
 }
 
-// Searchable order list: pick a planned / open order, or type a new order number.
+// Searchable production order list: pick a planned / open order, or type a new production order number.
+// Search also matches the CSO Number and the job name.
 export function OrderPicker({ value, options, disabled, invalid, allowNew = true, placeholder, onSelect }: Props) {
   const [text, setText] = useState(value)
   const [lastValue, setLastValue] = useState(value)
@@ -33,7 +34,12 @@ export function OrderPicker({ value, options, disabled, invalid, allowNew = true
   const matches = useMemo(() => {
     const q = typed.toLowerCase()
     const list = q
-      ? options.filter((o) => o.order_no.toLowerCase().includes(q) || (o.job_name ?? '').toLowerCase().includes(q))
+      ? options.filter(
+          (o) =>
+            o.order_no.toLowerCase().includes(q) ||
+            (o.job_name ?? '').toLowerCase().includes(q) ||
+            (o.cso_no ?? '').toLowerCase().includes(q),
+        )
       : options
     return list.slice(0, 50)
   }, [options, typed])
@@ -77,7 +83,7 @@ export function OrderPicker({ value, options, disabled, invalid, allowNew = true
           aria-expanded={open}
           aria-controls={listId}
           aria-autocomplete="list"
-          placeholder={placeholder ?? 'Search planned orders or type a new order number'}
+          placeholder={placeholder ?? 'Search production orders (or CSO) or type a new number'}
           maxLength={60}
           onChange={(e) => {
             setText(e.target.value)
@@ -115,7 +121,7 @@ export function OrderPicker({ value, options, disabled, invalid, allowNew = true
       {open && !disabled && (
         <ul className="picker-list" id={listId} role="listbox">
           {items.length === 0 && (
-            <li className="picker-empty">{allowNew ? 'No open orders. Type an order number to enter a new one.' : 'No matching orders.'}</li>
+            <li className="picker-empty">{allowNew ? 'No open orders. Type a production order number to enter a new one.' : 'No matching orders.'}</li>
           )}
           {items.map((it, i) => (
             <li
@@ -132,7 +138,8 @@ export function OrderPicker({ value, options, disabled, invalid, allowNew = true
               {it.option ? (
                 <>
                   <span>
-                    <b>{it.option.order_no}</b> · {it.option.job_name}
+                    <b>{it.option.order_no}</b>
+                    {it.option.cso_no ? ` · CSO ${it.option.cso_no}` : ''} · {it.option.job_name}
                   </span>
                   <span className="picker-meta">
                     {it.option.planned ? `Planned ${formatDate(it.option.plan_date)}` : 'Not in plan'}

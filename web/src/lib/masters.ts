@@ -1,4 +1,5 @@
-// The ten master lists. Each lives in its own database table.
+// The master lists. Most live in their own table; the four downtime reason lists
+// share downtime_reasons, one category each.
 export interface MasterConfig {
   slug: string // URL part: /masters/<slug>
   table: string // database table
@@ -6,6 +7,7 @@ export interface MasterConfig {
   singular: string // "Operator"
   nameLabel: string // label of the name field / column
   kind: 'simple' | 'machine'
+  category?: 'Man' | 'Machine' | 'Material' | 'Others' // downtime_reasons rows of this group
 }
 
 export const MASTERS: MasterConfig[] = [
@@ -17,8 +19,10 @@ export const MASTERS: MasterConfig[] = [
   { slug: 'paper-types', table: 'paper_types', title: 'Paper Type', singular: 'Paper Type', nameLabel: 'Paper Type Name', kind: 'simple' },
   { slug: 'coatings', table: 'coatings', title: 'Coating', singular: 'Coating', nameLabel: 'Coating Name', kind: 'simple' },
   { slug: 'wastage-reasons', table: 'wastage_reasons', title: 'Wastage Reasons', singular: 'Wastage Reason', nameLabel: 'Wastage Reason', kind: 'simple' },
-  { slug: 'bdt-reasons', table: 'bdt_reasons', title: 'BDT Reasons', singular: 'BDT Reason', nameLabel: 'BDT Reason', kind: 'simple' },
-  { slug: 'odt-reasons', table: 'odt_reasons', title: 'ODT Reasons', singular: 'ODT Reason', nameLabel: 'ODT Reason', kind: 'simple' },
+  { slug: 'downtime-man', table: 'downtime_reasons', category: 'Man', title: 'Downtime Reasons – Man', singular: 'Man reason', nameLabel: 'Reason', kind: 'simple' },
+  { slug: 'downtime-machine', table: 'downtime_reasons', category: 'Machine', title: 'Downtime Reasons – Machine', singular: 'Machine reason', nameLabel: 'Reason', kind: 'simple' },
+  { slug: 'downtime-material', table: 'downtime_reasons', category: 'Material', title: 'Downtime Reasons – Material', singular: 'Material reason', nameLabel: 'Reason', kind: 'simple' },
+  { slug: 'downtime-others', table: 'downtime_reasons', category: 'Others', title: 'Downtime Reasons – Others', singular: 'Other reason', nameLabel: 'Reason', kind: 'simple' },
 ]
 
 export function masterBySlug(slug: string): MasterConfig | undefined {

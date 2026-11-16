@@ -300,7 +300,7 @@ export function UserFormPage() {
 
       <section className="card">
         <h2>Machine Access</h2>
-        <p className="muted small">Production Entry, BDT and ODT only offer the machines a user may use.</p>
+        <p className="muted small">Production Entry and Downtime only offer the machines a user may use.</p>
         {targetIsSuper ? (
           <p>The Super Admin can use all machines.</p>
         ) : (
