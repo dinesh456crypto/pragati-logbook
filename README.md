@@ -153,6 +153,7 @@ node supabase/tests/downtime_reports.test.mjs <the six migrations above> \
 node supabase/tests/ink_formula.test.mjs $(ls supabase/migrations/*.sql | sort | grep -v phase9)
 node supabase/tests/wastage.test.mjs $(ls supabase/migrations/*.sql | sort)
 node supabase/tests/users.test.mjs $(ls supabase/migrations/*.sql | sort)
+node supabase/tests/job_import.test.mjs $(ls supabase/migrations/*.sql | sort)
 ```
 
 Reports: the dashboard and Production Log Summary count only submitted entries.

@@ -1924,3 +1924,43 @@ tr.inactive-row td {
     white-space: normal;
   }
 }
+
+/* Job Details bulk upload */
+.upload-pick p {
+  margin-top: 0;
+}
+.upload-summary {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+}
+.upload-summary svg {
+  flex: none;
+  margin-top: 2px;
+}
+.notice.success {
+  background: #e9f7f1;
+  color: #145c3d;
+  border-color: #b9e3cf;
+}
+.upload-errors {
+  max-height: 260px;
+  overflow: auto;
+  margin-top: 12px;
+}
+.upload-errors td.wrap {
+  min-width: 260px;
+}
+.upload-heading {
+  margin: 18px 0 8px;
+}
+.upload-rows {
+  max-height: 320px;
+  overflow: auto;
+}
+tr.row-bad td {
+  background: #fdf1f1;
+}
+.ok-text {
+  color: #1d8a5b;
+}

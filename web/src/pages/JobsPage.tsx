@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { Eye, Pencil, Plus, Search, Trash2 } from 'lucide-react'
+import { Eye, FileDown, FileUp, Pencil, Plus, Search, Trash2 } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../lib/auth'
 import { plantDate } from '../lib/dates'
@@ -21,6 +21,8 @@ import {
 } from '../lib/jobs'
 import type { Job } from '../lib/jobs'
 import { ConfirmDialog, Modal } from '../components/Modal'
+import { JobBulkUpload } from '../components/JobBulkUpload'
+import { buildTemplate, saveBlob } from '../lib/jobUpload'
 import { useToast } from '../components/Toast'
 
 const PAGE_SIZE = 15
@@ -57,6 +59,8 @@ export function JobsPage() {
   )
   const [deleting, setDeleting] = useState<Job | null>(null)
   const [busy, setBusy] = useState(false)
+  const [uploading, setUploading] = useState(false)
+  const [templateBusy, setTemplateBusy] = useState(false)
 
   useEffect(() => {
     if (params.has('new')) setParams({}, { replace: true })
@@ -140,6 +144,21 @@ export function JobsPage() {
 
   const headers = ['S.No', 'Date', 'Order No', 'Job Name', 'Category', 'Print Sides', 'UPS', 'Job Type', 'Paper Type', 'Qty (Sheets)', '']
 
+  // The template's Type of Paper list is the Paper Type master at download time.
+  async function downloadTemplate() {
+    setTemplateBusy(true)
+    try {
+      const { data, error } = await supabase.from('paper_types').select('name').eq('active', true).order('name')
+      if (error) throw new Error(friendlyError(error))
+      const blob = await buildTemplate(((data ?? []) as { name: string }[]).map((p) => p.name))
+      saveBlob(blob, 'Pragati Job Details Bulk Upload Template.xlsx')
+    } catch (err) {
+      notify('error', `Could not create the template: ${(err as Error).message}`)
+    } finally {
+      setTemplateBusy(false)
+    }
+  }
+
   return (
     <>
       <div className="pagehead">
@@ -148,9 +167,17 @@ export function JobsPage() {
           <p className="muted">Planned printing jobs · the source for Production Entry and Ink Formula</p>
         </div>
         {canCreate && (
-          <button type="button" className="primary" onClick={() => setOpen({ job: null, mode: 'edit' })}>
-            <Plus size={18} /> Create New Job
-          </button>
+          <div className="actions">
+            <button type="button" onClick={downloadTemplate} disabled={templateBusy}>
+              <FileDown size={18} /> {templateBusy ? 'Preparing…' : 'Download Template'}
+            </button>
+            <button type="button" onClick={() => setUploading(true)}>
+              <FileUp size={18} /> Bulk Upload
+            </button>
+            <button type="button" className="primary" onClick={() => setOpen({ job: null, mode: 'edit' })}>
+              <Plus size={18} /> Create New Job
+            </button>
+          </div>
         )}
       </div>
 
@@ -318,6 +345,20 @@ export function JobsPage() {
             notify('success', `Job ${orderNo} ${isNew ? 'created' : 'saved'}.`)
             setOpen(null)
             if (isNew) setPage(1)
+            refresh()
+          }}
+        />
+      )}
+
+      {uploading && (
+        <JobBulkUpload
+          onClose={() => setUploading(false)}
+          onTemplate={downloadTemplate}
+          templateBusy={templateBusy}
+          onImported={(count) => {
+            setUploading(false)
+            notify('success', `${count} job${count === 1 ? '' : 's'} imported.`)
+            setPage(1)
             refresh()
           }}
         />
@@ -491,7 +532,7 @@ function JobForm({ job, readOnly, canEdit, papers, onEdit, onClose, onSaved }: F
             <input value={jobName} onChange={(e) => setJobName(e.target.value)} maxLength={150} disabled={readOnly} />
           </label>
           <label className="field">
-            <span>Category</span>
+            <span>Category *</span>
             <input value={category} onChange={(e) => setCategory(e.target.value)} maxLength={80} disabled={readOnly} />
           </label>
           <label className="field">

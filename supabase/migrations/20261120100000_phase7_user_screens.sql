@@ -222,6 +222,9 @@ revoke execute on function
   public.admin_set_user_active(uuid, boolean), public.admin_mark_password_reset(uuid), public.admin_delete_user(uuid)
 from public, anon;
 
+-- Internal helper: only reachable through the checked functions above.
+revoke execute on function public.user_record_count_unchecked(uuid) from authenticated;
+
 grant execute on function
   public.user_directory(), public.user_record_count(uuid),
   public.admin_set_user_active(uuid, boolean), public.admin_mark_password_reset(uuid), public.admin_delete_user(uuid)
