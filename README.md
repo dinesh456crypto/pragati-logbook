@@ -154,6 +154,7 @@ node supabase/tests/ink_formula.test.mjs $(ls supabase/migrations/*.sql | sort |
 node supabase/tests/wastage.test.mjs $(ls supabase/migrations/*.sql | sort)
 node supabase/tests/users.test.mjs $(ls supabase/migrations/*.sql | sort)
 node supabase/tests/job_import.test.mjs $(ls supabase/migrations/*.sql | sort)
+# go-live hardening is checked by running users / wastage / job_import with all migrations
 ```
 
 Reports: the dashboard and Production Log Summary count only submitted entries.

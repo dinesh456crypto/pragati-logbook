@@ -1,202 +1,166 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
-import {
-  Eye,
-  KeyRound,
-  Pencil,
-  Plus,
-  Power,
-  Search,
-  ShieldCheck,
-  Trash2,
-} from "lucide-react";
-import { supabase } from "../lib/supabase";
-import { useAuth } from "../lib/auth";
-import { friendlyError } from "../lib/errors";
-import { formatDate } from "../lib/jobs";
-import { formatMoment } from "../lib/production";
-import { ROLE_LABELS } from "../lib/types";
-import type { Role } from "../lib/types";
-import { callAdmin, grantText } from "../lib/users";
-import type { Matrix, ResourceRow, UserRow } from "../lib/users";
-import { ConfirmDialog, Modal } from "../components/Modal";
-import { ResetPasswordDialog } from "../components/ResetPasswordDialog";
-import { useToast } from "../components/Toast";
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
+import { Eye, KeyRound, Pencil, Plus, Power, Search, ShieldCheck, Trash2 } from 'lucide-react'
+import { supabase } from '../lib/supabase'
+import { useAuth } from '../lib/auth'
+import { friendlyError } from '../lib/errors'
+import { formatDate } from '../lib/jobs'
+import { formatMoment } from '../lib/production'
+import { ROLE_LABELS } from '../lib/types'
+import type { Role } from '../lib/types'
+import { callAdmin, grantText } from '../lib/users'
+import type { Matrix, ResourceRow, UserRow } from '../lib/users'
+import { ConfirmDialog, Modal } from '../components/Modal'
+import { ResetPasswordDialog } from '../components/ResetPasswordDialog'
+import { useToast } from '../components/Toast'
 
-const PAGE_SIZE = 15;
+const PAGE_SIZE = 15
 
 interface Detail {
-  matrix: Matrix;
-  records: number | null;
+  matrix: Matrix
+  records: number | null
 }
 
 // List of Users: view, edit, permissions, activate/deactivate, reset password, delete.
 export function UsersPage() {
-  const { can, profile: me, isSuperAdmin } = useAuth();
-  const notify = useToast();
-  const navigate = useNavigate();
-  const [rows, setRows] = useState<UserRow[]>([]);
-  const [resources, setResources] = useState<ResourceRow[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [loadError, setLoadError] = useState("");
-  const [query, setQuery] = useState("");
-  const [role, setRole] = useState<"" | Role>("");
-  const [status, setStatus] = useState<"all" | "active" | "inactive">("all");
-  const [page, setPage] = useState(1);
-  const [viewing, setViewing] = useState<UserRow | null>(null);
-  const [detail, setDetail] = useState<Detail | null>(null);
-  const [toggling, setToggling] = useState<UserRow | null>(null);
-  const [resetting, setResetting] = useState<UserRow | null>(null);
+  const { can, profile: me, isSuperAdmin } = useAuth()
+  const notify = useToast()
+  const navigate = useNavigate()
+  const [rows, setRows] = useState<UserRow[]>([])
+  const [resources, setResources] = useState<ResourceRow[]>([])
+  const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState('')
+  const [query, setQuery] = useState('')
+  const [role, setRole] = useState<'' | Role>('')
+  const [status, setStatus] = useState<'all' | 'active' | 'inactive'>('all')
+  const [page, setPage] = useState(1)
+  const [viewing, setViewing] = useState<UserRow | null>(null)
+  const [detail, setDetail] = useState<Detail | null>(null)
+  const [toggling, setToggling] = useState<UserRow | null>(null)
+  const [resetting, setResetting] = useState<UserRow | null>(null)
   const [deleting, setDeleting] = useState<{
-    user: UserRow;
-    records: number | null;
-  } | null>(null);
-  const [busy, setBusy] = useState(false);
+    user: UserRow
+    records: number | null
+  } | null>(null)
+  const [busy, setBusy] = useState(false)
 
-  const canCreate = can("users", "create");
-  const canEdit = can("users", "edit");
-  const canDelete = can("users", "delete");
+  const canCreate = can('users', 'create')
+  const canEdit = can('users', 'edit')
+  const canDelete = can('users', 'delete')
 
   const load = useCallback(async () => {
     const [{ data, error }, res] = await Promise.all([
-      supabase.rpc("user_directory"),
-      supabase
-        .from("permission_resources")
-        .select("key, module, label, sort_order")
-        .order("sort_order"),
-    ]);
-    if (error) setLoadError(friendlyError(error));
+      supabase.rpc('user_directory'),
+      supabase.from('permission_resources').select('key, module, label, sort_order').order('sort_order'),
+    ])
+    if (error) setLoadError(friendlyError(error))
     else {
-      setRows((data ?? []) as UserRow[]);
-      setLoadError("");
+      setRows((data ?? []) as UserRow[])
+      setLoadError('')
     }
-    setResources((res.data ?? []) as ResourceRow[]);
-    setLoading(false);
-  }, []);
+    setResources((res.data ?? []) as ResourceRow[])
+    setLoading(false)
+  }, [])
 
   useEffect(() => {
-    load();
-  }, [load]);
+    load()
+  }, [load])
 
   const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase();
+    const q = query.trim().toLowerCase()
     return rows.filter(
       (r) =>
-        (!q ||
-          r.full_name.toLowerCase().includes(q) ||
-          r.username.includes(q)) &&
+        (!q || r.full_name.toLowerCase().includes(q) || r.username.includes(q)) &&
         (!role || r.role === role) &&
-        (status === "all" || (status === "active") === r.active),
-    );
-  }, [rows, query, role, status]);
-  const pages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
-  const current = Math.min(page, pages);
-  const visible = filtered.slice(
-    (current - 1) * PAGE_SIZE,
-    current * PAGE_SIZE,
-  );
+        (status === 'all' || (status === 'active') === r.active),
+    )
+  }, [rows, query, role, status])
+  const pages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE))
+  const current = Math.min(page, pages)
+  const visible = filtered.slice((current - 1) * PAGE_SIZE, current * PAGE_SIZE)
   const counts = {
     total: rows.length,
     active: rows.filter((r) => r.active).length,
-  };
+  }
 
   // Super Admin row: only the Super Admin may change it, and it can't be deactivated or deleted.
-  const editable = (u: UserRow) =>
-    canEdit && (u.role !== "super_admin" || u.id === me?.id);
-  const others = (u: UserRow) => u.role !== "super_admin" && u.id !== me?.id;
+  const editable = (u: UserRow) => canEdit && (u.role !== 'super_admin' || u.id === me?.id)
+  const others = (u: UserRow) => u.role !== 'super_admin' && u.id !== me?.id
 
   async function openView(u: UserRow) {
-    setViewing(u);
-    setDetail(null);
+    setViewing(u)
+    setDetail(null)
     const [perms, refs] = await Promise.all([
-      supabase
-        .from("user_permissions")
-        .select("resource, can_view, can_create, can_edit, can_delete")
-        .eq("profile_id", u.id),
-      supabase.rpc("user_record_count", { p_id: u.id }),
-    ]);
-    const m: Matrix = {};
+      supabase.from('user_permissions').select('resource, can_view, can_create, can_edit, can_delete').eq('profile_id', u.id),
+      supabase.rpc('user_record_count', { p_id: u.id }),
+    ])
+    const m: Matrix = {}
     for (const p of (perms.data ?? []) as {
-      resource: ResourceRow["key"];
-      can_view: boolean;
-      can_create: boolean;
-      can_edit: boolean;
-      can_delete: boolean;
+      resource: ResourceRow['key']
+      can_view: boolean
+      can_create: boolean
+      can_edit: boolean
+      can_delete: boolean
     }[]) {
       m[p.resource] = {
         view: p.can_view,
         create: p.can_create,
         edit: p.can_edit,
         delete: p.can_delete,
-      };
+      }
     }
     setDetail({
       matrix: m,
-      records: refs.error
-        ? null
-        : ((refs.data as { total: number }).total ?? 0),
-    });
+      records: refs.error ? null : ((refs.data as { total: number }).total ?? 0),
+    })
   }
 
   async function askDelete(u: UserRow) {
-    setDeleting({ user: u, records: null });
-    const { data, error } = await supabase.rpc("user_record_count", {
+    setDeleting({ user: u, records: null })
+    const { data, error } = await supabase.rpc('user_record_count', {
       p_id: u.id,
-    });
+    })
     setDeleting({
       user: u,
       records: error ? -1 : (data as { total: number }).total,
-    });
+    })
   }
 
   async function confirmToggle() {
-    if (!toggling) return;
-    setBusy(true);
+    if (!toggling) return
+    setBusy(true)
     try {
       await callAdmin({
-        action: "set_active",
+        action: 'set_active',
         id: toggling.id,
         active: !toggling.active,
-      });
-      notify(
-        "success",
-        `${toggling.full_name} ${toggling.active ? "deactivated: they can no longer sign in" : "activated"}.`,
-      );
-      await load();
+      })
+      notify('success', `${toggling.full_name} ${toggling.active ? 'deactivated: they can no longer sign in' : 'activated'}.`)
+      await load()
     } catch (err) {
-      notify("error", (err as Error).message);
+      notify('error', (err as Error).message)
     } finally {
-      setBusy(false);
-      setToggling(null);
+      setBusy(false)
+      setToggling(null)
     }
   }
 
   async function confirmDelete() {
-    if (!deleting) return;
-    setBusy(true);
+    if (!deleting) return
+    setBusy(true)
     try {
-      await callAdmin({ action: "delete", id: deleting.user.id });
-      notify("success", `${deleting.user.full_name} deleted.`);
-      await load();
+      await callAdmin({ action: 'delete', id: deleting.user.id })
+      notify('success', `${deleting.user.full_name} deleted.`)
+      await load()
     } catch (err) {
-      notify("error", (err as Error).message);
+      notify('error', (err as Error).message)
     } finally {
-      setBusy(false);
-      setDeleting(null);
+      setBusy(false)
+      setDeleting(null)
     }
   }
 
-  const headers = [
-    "S.No",
-    "Name",
-    "Username",
-    "Role",
-    "Status",
-    "Machines",
-    "Last Sign-in",
-    "Created Date",
-    "",
-  ];
+  const headers = ['S.No', 'Name', 'Username', 'Role', 'Status', 'Machines', 'Last Sign-in', 'Created Date', '']
 
   return (
     <>
@@ -204,17 +168,12 @@ export function UsersPage() {
         <div>
           <h1>List of Users</h1>
           <p className="muted">
-            {counts.total} user{counts.total === 1 ? "" : "s"} · {counts.active}{" "}
-            active
+            {counts.total} user{counts.total === 1 ? '' : 's'} · {counts.active} active
           </p>
         </div>
         {canCreate && (
           <div className="actions">
-            <button
-              type="button"
-              className="primary"
-              onClick={() => navigate("/users/new")}
-            >
+            <button type="button" className="primary" onClick={() => navigate('/users/new')}>
               <Plus size={18} /> Create User
             </button>
           </div>
@@ -228,18 +187,14 @@ export function UsersPage() {
             <input
               value={query}
               onChange={(e) => {
-                setQuery(e.target.value);
-                setPage(1);
+                setQuery(e.target.value)
+                setPage(1)
               }}
               placeholder="Search name or username"
               aria-label="Search"
             />
           </label>
-          <select
-            value={role}
-            onChange={(e) => (setRole(e.target.value as "" | Role), setPage(1))}
-            aria-label="Role filter"
-          >
+          <select value={role} onChange={(e) => (setRole(e.target.value as '' | Role), setPage(1))} aria-label="Role filter">
             <option value="">All roles</option>
             {(Object.keys(ROLE_LABELS) as Role[]).map((r) => (
               <option key={r} value={r}>
@@ -247,14 +202,7 @@ export function UsersPage() {
               </option>
             ))}
           </select>
-          <select
-            value={status}
-            onChange={(e) => (
-              setStatus(e.target.value as typeof status),
-              setPage(1)
-            )}
-            aria-label="Status filter"
-          >
+          <select value={status} onChange={(e) => (setStatus(e.target.value as typeof status), setPage(1))} aria-label="Status filter">
             <option value="all">All statuses</option>
             <option value="active">Active</option>
             <option value="inactive">Inactive</option>
@@ -281,66 +229,38 @@ export function UsersPage() {
               ) : visible.length === 0 ? (
                 <tr>
                   <td colSpan={headers.length} className="empty">
-                    {rows.length ? "No matching users." : "No users yet."}
+                    {rows.length ? 'No matching users.' : 'No users yet.'}
                   </td>
                 </tr>
               ) : (
                 visible.map((u, i) => (
-                  <tr
-                    key={u.id}
-                    className={`clickable${u.active ? "" : " inactive-row"}`}
-                    onClick={() => openView(u)}
-                  >
+                  <tr key={u.id} className={`clickable${u.active ? '' : ' inactive-row'}`} onClick={() => openView(u)}>
                     <td>{(current - 1) * PAGE_SIZE + i + 1}</td>
                     <td>
                       <b>{u.full_name}</b>
-                      {u.id === me?.id && (
-                        <span className="muted small"> (you)</span>
-                      )}
+                      {u.id === me?.id && <span className="muted small"> (you)</span>}
                     </td>
                     <td>{u.username}</td>
                     <td>{ROLE_LABELS[u.role] ?? u.role}</td>
                     <td>
-                      <span className={`badge ${u.active ? "green" : "grey"}`}>
-                        {u.active ? "Active" : "Inactive"}
-                      </span>
-                      {u.active && u.must_change_password && (
-                        <div className="muted small">Temporary password</div>
-                      )}
+                      <span className={`badge ${u.active ? 'green' : 'grey'}`}>{u.active ? 'Active' : 'Inactive'}</span>
+                      {u.active && u.must_change_password && <div className="muted small">Temporary password</div>}
                     </td>
-                    <td>
-                      {u.all_machines
-                        ? "All"
-                        : u.machine_codes.join(", ") || "—"}
-                    </td>
+                    <td>{u.all_machines ? 'All' : u.machine_codes.join(', ') || '—'}</td>
                     <td>
                       {u.last_sign_in_at ? (
                         <>
-                          {formatMoment(u.last_sign_in_at).split(" ")[0]}
-                          <div className="muted small">
-                            {formatMoment(u.last_sign_in_at)
-                              .split(" ")
-                              .slice(1)
-                              .join(" ")}
-                          </div>
+                          {formatMoment(u.last_sign_in_at).split(' ')[0]}
+                          <div className="muted small">{formatMoment(u.last_sign_in_at).split(' ').slice(1).join(' ')}</div>
                         </>
                       ) : (
                         <span className="muted">Never</span>
                       )}
                     </td>
                     <td>{formatDate(u.created_at.slice(0, 10))}</td>
-                    <td
-                      className="row-actions"
-                      onClick={(e) => e.stopPropagation()}
-                    >
+                    <td className="row-actions" onClick={(e) => e.stopPropagation()}>
                       <div className="action-grid">
-                        <button
-                          type="button"
-                          className="icon-button"
-                          title="View"
-                          aria-label={`View ${u.username}`}
-                          onClick={() => openView(u)}
-                        >
+                        <button type="button" className="icon-button" title="View" aria-label={`View ${u.username}`} onClick={() => openView(u)}>
                           <Eye size={17} />
                         </button>
                         {editable(u) && (
@@ -354,15 +274,13 @@ export function UsersPage() {
                             <Pencil size={17} />
                           </button>
                         )}
-                        {isSuperAdmin && u.role !== "super_admin" && (
+                        {isSuperAdmin && u.role !== 'super_admin' && (
                           <button
                             type="button"
                             className="icon-button"
                             title="Manage Permissions"
                             aria-label={`Permissions of ${u.username}`}
-                            onClick={() =>
-                              navigate(`/users/${u.id}#permissions`)
-                            }
+                            onClick={() => navigate(`/users/${u.id}#permissions`)}
                           >
                             <ShieldCheck size={17} />
                           </button>
@@ -370,9 +288,9 @@ export function UsersPage() {
                         {canEdit && others(u) && (
                           <button
                             type="button"
-                            className={`icon-button ${u.active ? "danger-text" : ""}`}
-                            title={u.active ? "Deactivate" : "Activate"}
-                            aria-label={`${u.active ? "Deactivate" : "Activate"} ${u.username}`}
+                            className={`icon-button ${u.active ? 'danger-text' : ''}`}
+                            title={u.active ? 'Deactivate' : 'Activate'}
+                            aria-label={`${u.active ? 'Deactivate' : 'Activate'} ${u.username}`}
                             onClick={() => setToggling(u)}
                           >
                             <Power size={17} />
@@ -412,21 +330,13 @@ export function UsersPage() {
           <span className="muted small">
             {filtered.length
               ? `Showing ${(current - 1) * PAGE_SIZE + 1}–${Math.min(current * PAGE_SIZE, filtered.length)} of ${filtered.length}`
-              : "Showing 0 users"}
+              : 'Showing 0 users'}
           </span>
           <div className="actions">
-            <button
-              type="button"
-              disabled={current <= 1}
-              onClick={() => setPage(current - 1)}
-            >
+            <button type="button" disabled={current <= 1} onClick={() => setPage(current - 1)}>
               Previous
             </button>
-            <button
-              type="button"
-              disabled={current >= pages}
-              onClick={() => setPage(current + 1)}
-            >
+            <button type="button" disabled={current >= pages} onClick={() => setPage(current + 1)}>
               Next
             </button>
           </div>
@@ -444,11 +354,7 @@ export function UsersPage() {
                 Close
               </button>
               {editable(viewing) && (
-                <button
-                  type="button"
-                  className="primary"
-                  onClick={() => navigate(`/users/${viewing.id}`)}
-                >
+                <button type="button" className="primary" onClick={() => navigate(`/users/${viewing.id}`)}>
                   <Pencil size={16} /> Edit
                 </button>
               )}
@@ -460,30 +366,20 @@ export function UsersPage() {
             <dd>{ROLE_LABELS[viewing.role] ?? viewing.role}</dd>
             <dt>Status</dt>
             <dd>
-              {viewing.active ? "Active" : "Inactive (cannot sign in)"}
-              {viewing.must_change_password && viewing.active
-                ? " · temporary password not yet changed"
-                : ""}
+              {viewing.active ? 'Active' : 'Inactive (cannot sign in)'}
+              {viewing.must_change_password && viewing.active ? ' · temporary password not yet changed' : ''}
             </dd>
             <dt>Machines</dt>
-            <dd>
-              {viewing.role === "super_admin" || viewing.all_machines
-                ? "All machines"
-                : viewing.machine_codes.join(", ") || "None"}
-            </dd>
+            <dd>{viewing.role === 'super_admin' || viewing.all_machines ? 'All machines' : viewing.machine_codes.join(', ') || 'None'}</dd>
             <dt>Last sign-in</dt>
-            <dd>
-              {viewing.last_sign_in_at
-                ? formatMoment(viewing.last_sign_in_at)
-                : "Never"}
-            </dd>
+            <dd>{viewing.last_sign_in_at ? formatMoment(viewing.last_sign_in_at) : 'Never'}</dd>
             <dt>Created</dt>
             <dd>{formatMoment(viewing.created_at)}</dd>
             <dt>Records in the logbook</dt>
-            <dd>{detail ? (detail.records ?? "—") : "Loading…"}</dd>
+            <dd>{detail ? (detail.records ?? '—') : 'Loading…'}</dd>
           </dl>
           <h3>Permissions</h3>
-          {viewing.role === "super_admin" ? (
+          {viewing.role === 'super_admin' ? (
             <p>Every permission (Super Admin).</p>
           ) : !detail ? (
             <p className="muted">Loading…</p>
@@ -499,10 +395,7 @@ export function UsersPage() {
                 </thead>
                 <tbody>
                   {resources.map((r) => (
-                    <tr
-                      key={r.key}
-                      className={detail.matrix[r.key]?.view ? "" : "muted"}
-                    >
+                    <tr key={r.key} className={detail.matrix[r.key]?.view ? '' : 'muted'}>
                       <td>{r.module}</td>
                       <td>{r.label}</td>
                       <td>{grantText(detail.matrix[r.key])}</td>
@@ -517,13 +410,13 @@ export function UsersPage() {
 
       {toggling && (
         <ConfirmDialog
-          title={`${toggling.active ? "Deactivate" : "Activate"} ${toggling.full_name}?`}
+          title={`${toggling.active ? 'Deactivate' : 'Activate'} ${toggling.full_name}?`}
           message={
             toggling.active
-              ? "They are signed out and cannot sign in until the account is activated again. Their records stay as they are."
-              : "They can sign in again with their current password and permissions."
+              ? 'They are signed out and cannot sign in until the account is activated again. Their records stay as they are.'
+              : 'They can sign in again with their current password and permissions.'
           }
-          confirmLabel={toggling.active ? "Deactivate" : "Activate"}
+          confirmLabel={toggling.active ? 'Deactivate' : 'Activate'}
           danger={toggling.active}
           busy={busy}
           onConfirm={confirmToggle}
@@ -536,20 +429,16 @@ export function UsersPage() {
           user={resetting}
           onClose={() => setResetting(null)}
           onDone={(message) => {
-            setResetting(null);
-            notify("success", message);
-            load();
+            setResetting(null)
+            notify('success', message)
+            load()
           }}
         />
       )}
 
       {deleting &&
         (deleting.records === null ? (
-          <Modal
-            title={`Delete ${deleting.user.full_name}?`}
-            onClose={() => setDeleting(null)}
-            width={440}
-          >
+          <Modal title={`Delete ${deleting.user.full_name}?`} onClose={() => setDeleting(null)} width={440}>
             <p className="muted">Checking the user's records…</p>
           </Modal>
         ) : deleting.records !== 0 ? (
@@ -567,8 +456,8 @@ export function UsersPage() {
                     type="button"
                     className="danger"
                     onClick={() => {
-                      setToggling(deleting.user);
-                      setDeleting(null);
+                      setToggling(deleting.user)
+                      setDeleting(null)
                     }}
                   >
                     <Power size={16} /> Deactivate instead
@@ -580,7 +469,7 @@ export function UsersPage() {
             <p>
               {deleting.records > 0
                 ? `This user has ${deleting.records} record(s) in the logbook (entries, plans or changes). To keep the history complete, deactivate the account instead: they cannot sign in, and their name stays on their records.`
-                : "Could not check this user’s records. Please try again."}
+                : 'Could not check this user’s records. Please try again.'}
             </p>
           </Modal>
         ) : (
@@ -595,5 +484,5 @@ export function UsersPage() {
           />
         ))}
     </>
-  );
+  )
 }
