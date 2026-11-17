@@ -6,7 +6,7 @@ import { useAuth } from '../lib/auth'
 import { friendlyError } from '../lib/errors'
 import { addDays, plantDate } from '../lib/dates'
 import { JOB_TYPES, formatDate, formatNumber, searchPattern, tidy } from '../lib/jobs'
-import { entryLabel, formatDuration, formatMoment, isoToStamp, stampToIso } from '../lib/production'
+import { DOWNTIME_GROUPS, downtimeGroupLabel, entryLabel, formatDuration, formatMoment, isoToStamp, stampToIso } from '../lib/production'
 import type { Stamp } from '../lib/production'
 import { downloadExcel, downloadPdf, hours, percent } from '../lib/exports'
 import type { CellValue, ExportTable } from '../lib/exports'
@@ -96,7 +96,8 @@ const GROUPS: { key: GroupBy; label: string }[] = [
 const sum = (rows: LogRow[], pick: (r: LogRow) => number | null | undefined) => rows.reduce((s, r) => s + (pick(r) ?? 0), 0)
 const mins = (m: number | null | undefined) => (m == null ? '—' : formatDuration(m))
 const downOf = (r: LogRow) => (r.man_minutes ?? 0) + (r.machine_minutes ?? 0) + (r.material_minutes ?? 0) + (r.other_minutes ?? 0)
-// Downtime of a set of entries: the total and its split by Man / Machine / Material / Others.
+// Downtime of a set of entries: the total and its split by category
+// (Waiting/Approval, Breakdown, Material, Others; stored as man / machine / material / other).
 const downtimeSums = (rows: LogRow[]) => ({
   down: sum(rows, downOf),
   man: sum(rows, (r) => r.man_minutes),
@@ -104,7 +105,7 @@ const downtimeSums = (rows: LogRow[]) => ({
   material: sum(rows, (r) => r.material_minutes),
   others: sum(rows, (r) => r.other_minutes),
 })
-const GROUP_ORDER = ['Man', 'Machine', 'Material', 'Others']
+const GROUP_ORDER = DOWNTIME_GROUPS.map((g) => downtimeGroupLabel(g))
 
 // Monday of the week, for weekly grouping.
 function weekOf(date: string) {
@@ -242,7 +243,7 @@ export function ProductionLogPage() {
           if (error) return notify('error', friendlyError(error))
           const map = new Map<string, DowntimeGroup>()
           for (const d of (data ?? []) as { kind: string | null; reason: string | null; entry_id: string | null; minutes: number; counted_minutes: number }[]) {
-            const kind = d.kind ?? 'Others'
+            const kind = downtimeGroupLabel(d.kind ?? 'Others')
             const key = `${kind}|${d.reason ?? 'No reason'}`
             const g = map.get(key) ?? { kind, reason: d.reason ?? 'No reason', events: 0, inJob: 0, between: 0, minutes: 0, counted: 0 }
             g.events++
@@ -346,7 +347,7 @@ export function ProductionLogPage() {
       'Machine Speed', 'Total Given', 'OK Sheets', 'Separate Sheets', 'Wastage Sheets',
       'Job Changeover (min)', 'Job Changeover net', 'Registration (min)', 'Registration net', 'Colour Matching (min)', 'Colour Matching net',
       'Changeover gross', 'Changeover net', 'Production (min)', 'Production net',
-      'Downtime (min)', 'Man (min)', 'Machine (min)', 'Material (min)', 'Others (min)', 'Remarks',
+      'Downtime (min)', 'Waiting/Approval (min)', 'Breakdown (min)', 'Material (min)', 'Others (min)', 'Remarks',
     ],
     rows: rows.map((r, i) => [
       i + 1, entryLabel(r.entry_no), formatDate(r.production_date), r.order_no, r.cso_no, r.job_name, r.machines?.code, r.shift,
@@ -372,7 +373,7 @@ export function ProductionLogPage() {
     if (group === 'downtime') {
       return {
         name: label,
-        headers: ['Type', 'Reason', 'Records', 'During jobs', 'Between jobs', 'Recorded (min)', 'Counted (min)', 'Counted (hours)'],
+        headers: ['Category', 'Reason', 'Records', 'During jobs', 'Between jobs', 'Recorded (min)', 'Counted (min)', 'Counted (hours)'],
         rows: extra.downtime.map((d) => [d.kind, d.reason, d.events, d.inJob, d.between, d.minutes, d.counted, hours(d.counted)]),
       }
     }
@@ -381,7 +382,7 @@ export function ProductionLogPage() {
       headers: [
         label.replace('-wise', ''), 'Entries', 'Jobs', 'Total Given', 'OK Sheets', 'Wastage', 'Quality %', 'Wastage %',
         'Changeover gross (min)', 'Changeover net (min)', 'Production gross (min)', 'Production net (min)',
-        'Downtime (min)', 'Man (min)', 'Machine (min)', 'Material (min)', 'Others (min)',
+        'Downtime (min)', 'Waiting/Approval (min)', 'Breakdown (min)', 'Material (min)', 'Others (min)',
       ],
       rows: grouped.map((g) => [
         g.label, g.entries, g.jobs, g.given, g.ok, g.waste, g.quality, g.wastePct, g.coGross, g.coNet, g.runGross, g.runNet,
@@ -531,7 +532,7 @@ export function ProductionLogPage() {
         <Metric
           label="Downtime (during these jobs)"
           value={mins(totals.down)}
-          hint={`Man ${mins(totals.man)} · Machine ${mins(totals.machine)} · Material ${mins(totals.material)} · Others ${mins(totals.others)}`}
+          hint={`Waiting/Approval ${mins(totals.man)} · Breakdown ${mins(totals.machine)} · Material ${mins(totals.material)} · Others ${mins(totals.others)}`}
         />
       </div>
 
@@ -691,8 +692,8 @@ function DowntimeSplit({ row }: { row: LogRow }) {
   if (!total) return null
   const parts = (
     [
-      ['Man', row.man_minutes],
-      ['Machine', row.machine_minutes],
+      ['Waiting/Approval', row.man_minutes],
+      ['Breakdown', row.machine_minutes],
       ['Material', row.material_minutes],
       ['Others', row.other_minutes],
     ] as const

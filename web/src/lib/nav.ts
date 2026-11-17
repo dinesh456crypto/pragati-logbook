@@ -63,10 +63,7 @@ export const NAV: NavModule[] = [
       master('Paper Type', 'paper-types'),
       master('Coating', 'coatings'),
       master('Wastage Reasons', 'wastage-reasons'),
-      master('Downtime Reasons – Man', 'downtime-man'),
-      master('Downtime Reasons – Machine', 'downtime-machine'),
-      master('Downtime Reasons – Material', 'downtime-material'),
-      master('Downtime Reasons – Others', 'downtime-others'),
+      master('Downtime Reasons', 'downtime-reasons'),
     ],
   },
   {

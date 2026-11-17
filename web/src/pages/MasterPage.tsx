@@ -12,7 +12,7 @@ import { useToast } from '../components/Toast'
 
 const PAGE_SIZE = 15
 
-// One screen serves all ten master lists; the URL decides which table is shown.
+// One screen serves all master lists; the URL decides which table is shown.
 export function MasterPage() {
   const { pathname } = useLocation()
   const config = masterBySlug(pathname.split('/').pop() ?? '')
@@ -35,6 +35,10 @@ function MasterList({ config }: { config: MasterConfig }) {
   const [editing, setEditing] = useState<MasterRow | 'new' | null>(null)
   const [deleting, setDeleting] = useState<MasterRow | null>(null)
   const [busy, setBusy] = useState(false)
+  // Reason lists with categories: pick the category first, then its reasons are listed.
+  const categories = config.categories
+  const [category, setCategory] = useState(categories?.[0]?.key ?? '')
+  const categoryLabel = categories?.find((c) => c.key === category)?.label ?? ''
 
   const canCreate = can('masters', 'create')
   const canEdit = can('masters', 'edit')
@@ -44,10 +48,9 @@ function MasterList({ config }: { config: MasterConfig }) {
   const fetchRows = useCallback(() => {
     const columns = isMachine
       ? 'id, code, name, default_speed, sort_order, active, created_at, updated_at'
-      : 'id, name, active, created_at, updated_at'
-    const q = supabase.from(config.table).select(columns)
-    return (config.category ? q.eq('category', config.category) : q).order('created_at').order('id')
-  }, [config.table, config.category, isMachine])
+      : `id, name, active, created_at, updated_at${config.categories ? ', category' : ''}`
+    return supabase.from(config.table).select(columns).order('created_at').order('id')
+  }, [config.table, config.categories, isMachine])
 
   const applyRows = useCallback(({ data, error }: { data: unknown; error: unknown }) => {
     if (error) setLoadError(friendlyError(error))
@@ -68,17 +71,20 @@ function MasterList({ config }: { config: MasterConfig }) {
     }
   }, [fetchRows, applyRows])
 
+  // The rows of the chosen category (all rows for lists without categories).
+  const inCategory = useMemo(() => (categories ? rows.filter((r) => r.category === category) : rows), [rows, categories, category])
+
   // S.No follows creation order and does not change when filtering.
-  const serial = useMemo(() => new Map(rows.map((r, i) => [r.id, i + 1])), [rows])
+  const serial = useMemo(() => new Map(inCategory.map((r, i) => [r.id, i + 1])), [inCategory])
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase()
-    return rows.filter(
+    return inCategory.filter(
       (r) =>
         (status === 'all' || (status === 'active') === r.active) &&
         (!q || r.name.toLowerCase().includes(q) || (r.code ?? '').toLowerCase().includes(q)),
     )
-  }, [rows, query, status])
+  }, [inCategory, query, status])
 
   const pages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE))
   const current = Math.min(page, pages)
@@ -107,14 +113,39 @@ function MasterList({ config }: { config: MasterConfig }) {
       <div className="pagehead">
         <div>
           <h1>{config.title}</h1>
-          <p className="muted">Master data · create, view, edit, delete and search</p>
+          <p className="muted">
+            {categories ? 'Choose a category, then create, edit or search its reasons' : 'Master data · create, view, edit, delete and search'}
+          </p>
         </div>
         {canCreate && (
           <button type="button" className="primary" onClick={() => setEditing('new')}>
-            <Plus size={18} /> Create New
+            <Plus size={18} /> {categories ? `New ${categoryLabel} reason` : 'Create New'}
           </button>
         )}
       </div>
+
+      {categories && (
+        <div className="category-tabs" role="tablist" aria-label="Category">
+          {categories.map((c) => {
+            const count = rows.filter((r) => r.category === c.key).length
+            return (
+              <button
+                key={c.key}
+                type="button"
+                role="tab"
+                aria-selected={category === c.key}
+                className={category === c.key ? 'on' : ''}
+                onClick={() => {
+                  setCategory(c.key)
+                  setPage(1)
+                }}
+              >
+                {c.label} <span className="count">{count}</span>
+              </button>
+            )
+          })}
+        </div>
+      )}
 
       <section className="card">
         <div className="toolbar">
@@ -126,7 +157,7 @@ function MasterList({ config }: { config: MasterConfig }) {
                 setQuery(e.target.value)
                 setPage(1)
               }}
-              placeholder={isMachine ? 'Search Machine ID or name' : `Search ${config.title.toLowerCase()}`}
+              placeholder={isMachine ? 'Search Machine ID or name' : categories ? `Search ${categoryLabel} reasons` : `Search ${config.title.toLowerCase()}`}
               aria-label="Search"
             />
           </label>
@@ -165,7 +196,11 @@ function MasterList({ config }: { config: MasterConfig }) {
               ) : visible.length === 0 ? (
                 <tr>
                   <td colSpan={headers.length} className="empty">
-                    {rows.length ? 'No matching records.' : `No ${config.title.toLowerCase()} yet.`}
+                    {inCategory.length
+                      ? 'No matching records.'
+                      : categories
+                        ? `No ${categoryLabel} reasons yet.`
+                        : `No ${config.title.toLowerCase()} yet.`}
                   </td>
                 </tr>
               ) : (
@@ -224,6 +259,7 @@ function MasterList({ config }: { config: MasterConfig }) {
       {editing && (
         <MasterForm
           config={config}
+          defaultCategory={category}
           row={editing === 'new' ? null : editing}
           readOnly={editing === 'new' ? !canCreate : !canEdit}
           onClose={() => setEditing(null)}
@@ -257,14 +293,16 @@ function MasterList({ config }: { config: MasterConfig }) {
 
 interface FormProps {
   config: MasterConfig
+  defaultCategory: string
   row: MasterRow | null
   readOnly: boolean
   onClose: () => void
   onSaved: (name: string, isNew: boolean) => void
 }
 
-function MasterForm({ config, row, readOnly, onClose, onSaved }: FormProps) {
+function MasterForm({ config, defaultCategory, row, readOnly, onClose, onSaved }: FormProps) {
   const isMachine = config.kind === 'machine'
+  const [category, setCategory] = useState(row?.category ?? defaultCategory)
   const [code, setCode] = useState(row?.code ?? '')
   const [name, setName] = useState(row?.name ?? '')
   const [speed, setSpeed] = useState(String(row?.default_speed ?? 13500))
@@ -288,7 +326,10 @@ function MasterForm({ config, row, readOnly, onClose, onSaved }: FormProps) {
 
     const values: Record<string, unknown> = { name: cleanName, active }
     if (isMachine) Object.assign(values, { code: cleanCode, default_speed: speedNum })
-    if (config.category && !row) Object.assign(values, { category: config.category })
+    if (config.categories) {
+      if (!config.categories.some((c) => c.key === category)) return setError('Select a category.')
+      Object.assign(values, { category })
+    }
 
     setBusy(true)
     setError('')
@@ -329,6 +370,18 @@ function MasterForm({ config, row, readOnly, onClose, onSaved }: FormProps) {
           <label className="field">
             <span>Machine ID *</span>
             <input value={code} onChange={(e) => setCode(e.target.value)} maxLength={40} disabled={readOnly} autoFocus={!readOnly} />
+          </label>
+        )}
+        {config.categories && (
+          <label className="field">
+            <span>Category *</span>
+            <select value={category} onChange={(e) => setCategory(e.target.value)} disabled={readOnly}>
+              {config.categories.map((c) => (
+                <option key={c.key} value={c.key}>
+                  {c.label}
+                </option>
+              ))}
+            </select>
           </label>
         )}
         <label className="field">

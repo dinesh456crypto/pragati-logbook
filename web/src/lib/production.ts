@@ -69,9 +69,25 @@ export interface WastageRow {
   reason_id: string
 }
 
-// Downtime reasons are grouped Man | Machine | Material | Others (Masters → Downtime Reasons).
+// Downtime reasons are grouped in four categories (Masters → Downtime Reasons).
+// The database keeps the keys Man / Machine / Material / Others; the screens show the names below.
 export const DOWNTIME_GROUPS = ['Man', 'Machine', 'Material', 'Others'] as const
 export type DowntimeGroup = (typeof DOWNTIME_GROUPS)[number]
+export const DOWNTIME_GROUP_LABEL: Record<DowntimeGroup, string> = {
+  Man: 'Waiting/Approval',
+  Machine: 'Breakdown',
+  Material: 'Material',
+  Others: 'Others',
+}
+export const downtimeGroupLabel = (g: string | null | undefined) => (g ? (DOWNTIME_GROUP_LABEL[g as DowntimeGroup] ?? g) : '')
+
+// Wastage reasons are grouped Material | Method | Others (Masters → Wastage Reasons).
+export const WASTAGE_GROUPS = ['Material', 'Method', 'Others'] as const
+export type WastageGroup = (typeof WASTAGE_GROUPS)[number]
+
+// Column headings for the reason buttons.
+export const DOWNTIME_COLUMNS = DOWNTIME_GROUPS.map((key) => ({ key, label: DOWNTIME_GROUP_LABEL[key] }))
+export const WASTAGE_COLUMNS = WASTAGE_GROUPS.map((key) => ({ key, label: key }))
 
 export interface DowntimeRow {
   reason_id: string
@@ -180,7 +196,7 @@ export function newEntryState(): EntryState {
     total_sheets: '',
     ok_sheets: '',
     separate_sheets: '',
-    wastage: [{ quantity: '', reason_id: '' }],
+    wastage: [], // one row per selected wastage reason
     downtime: [],
     manual_starts: [],
     remarks: '',
@@ -490,6 +506,17 @@ export interface DowntimeDbRow {
   remarks: string | null
 }
 
+// One row per wastage reason (an older entry could list a reason twice: the quantities are added).
+function mergeWastage(rows: { quantity: number | null; reason_id: string | null }[]): WastageRow[] {
+  const out: WastageRow[] = []
+  for (const w of rows) {
+    const same = w.reason_id ? out.find((x) => x.reason_id === w.reason_id) : undefined
+    if (same) same.quantity = String((Number(same.quantity) || 0) + (w.quantity ?? 0))
+    else out.push({ quantity: str(w.quantity), reason_id: str(w.reason_id) })
+  }
+  return out
+}
+
 export function fromRow(
   r: EntryRow,
   wastage: { quantity: number | null; reason_id: string | null }[],
@@ -527,9 +554,7 @@ export function fromRow(
     total_sheets: str(r.total_sheets),
     ok_sheets: str(r.ok_sheets),
     separate_sheets: str(r.separate_sheets),
-    wastage: wastage.length
-      ? wastage.map((w) => ({ quantity: str(w.quantity), reason_id: str(w.reason_id) }))
-      : [{ quantity: '', reason_id: '' }],
+    wastage: mergeWastage(wastage),
     downtime: downtime.map((d) => ({
       reason_id: str(d.reason_id),
       span: span(d.start_at, d.end_at),

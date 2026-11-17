@@ -1,5 +1,7 @@
-// The master lists. Most live in their own table; the four downtime reason lists
-// share downtime_reasons, one category each.
+// The master lists, each in its own table. Downtime and wastage reasons also
+// have a category: the screen asks for the category first, then lists its reasons.
+import { DOWNTIME_COLUMNS, WASTAGE_COLUMNS } from './production'
+
 export interface MasterConfig {
   slug: string // URL part: /masters/<slug>
   table: string // database table
@@ -7,7 +9,7 @@ export interface MasterConfig {
   singular: string // "Operator"
   nameLabel: string // label of the name field / column
   kind: 'simple' | 'machine'
-  category?: 'Man' | 'Machine' | 'Material' | 'Others' // downtime_reasons rows of this group
+  categories?: readonly { key: string; label: string }[] // reasons grouped by category
 }
 
 export const MASTERS: MasterConfig[] = [
@@ -18,11 +20,8 @@ export const MASTERS: MasterConfig[] = [
   { slug: 'units', table: 'units', title: 'Units', singular: 'Unit', nameLabel: 'Unit Name', kind: 'simple' },
   { slug: 'paper-types', table: 'paper_types', title: 'Paper Type', singular: 'Paper Type', nameLabel: 'Paper Type Name', kind: 'simple' },
   { slug: 'coatings', table: 'coatings', title: 'Coating', singular: 'Coating', nameLabel: 'Coating Name', kind: 'simple' },
-  { slug: 'wastage-reasons', table: 'wastage_reasons', title: 'Wastage Reasons', singular: 'Wastage Reason', nameLabel: 'Wastage Reason', kind: 'simple' },
-  { slug: 'downtime-man', table: 'downtime_reasons', category: 'Man', title: 'Downtime Reasons – Man', singular: 'Man reason', nameLabel: 'Reason', kind: 'simple' },
-  { slug: 'downtime-machine', table: 'downtime_reasons', category: 'Machine', title: 'Downtime Reasons – Machine', singular: 'Machine reason', nameLabel: 'Reason', kind: 'simple' },
-  { slug: 'downtime-material', table: 'downtime_reasons', category: 'Material', title: 'Downtime Reasons – Material', singular: 'Material reason', nameLabel: 'Reason', kind: 'simple' },
-  { slug: 'downtime-others', table: 'downtime_reasons', category: 'Others', title: 'Downtime Reasons – Others', singular: 'Other reason', nameLabel: 'Reason', kind: 'simple' },
+  { slug: 'wastage-reasons', table: 'wastage_reasons', title: 'Wastage Reasons', singular: 'Wastage Reason', nameLabel: 'Wastage Reason', kind: 'simple', categories: WASTAGE_COLUMNS },
+  { slug: 'downtime-reasons', table: 'downtime_reasons', title: 'Downtime Reasons', singular: 'Downtime Reason', nameLabel: 'Downtime Reason', kind: 'simple', categories: DOWNTIME_COLUMNS },
 ]
 
 export function masterBySlug(slug: string): MasterConfig | undefined {
@@ -39,4 +38,5 @@ export interface MasterRow {
   code?: string
   default_speed?: number
   sort_order?: number
+  category?: string
 }

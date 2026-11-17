@@ -174,7 +174,7 @@ export function DashboardPage() {
       label: 'Total Downtime',
       value: t ? formatDuration(t.downtime) : '—',
       hint: t
-        ? `Man ${formatDuration(t.man)} · Machine ${formatDuration(t.machine)} · Material ${formatDuration(t.material)} · Others ${formatDuration(t.others)}${t.night_excluded ? ` · ${formatDuration(t.night_excluded)} overnight not counted` : ''}`
+        ? `Waiting/Approval ${formatDuration(t.man)} · Breakdown ${formatDuration(t.machine)} · Material ${formatDuration(t.material)} · Others ${formatDuration(t.others)}${t.night_excluded ? ` · ${formatDuration(t.night_excluded)} overnight not counted` : ''}`
         : 'Overnight window left out',
     },
   ]
@@ -243,7 +243,7 @@ export function DashboardPage() {
           <table>
             <thead>
               <tr>
-                {['Machine', 'Jobs Ran', 'Changeover (net)', 'Production (net)', 'Given', 'OK', 'Quality', 'Wastage', 'Wastage %', 'Downtime', 'Man', 'Machine', 'Material', 'Others'].map((h) => (
+                {['Machine', 'Jobs Ran', 'Changeover (net)', 'Production (net)', 'Given', 'OK', 'Quality', 'Wastage', 'Wastage %', 'Downtime', 'Waiting/Approval', 'Breakdown', 'Material', 'Others'].map((h) => (
                   <th key={h}>{h}</th>
                 ))}
               </tr>

@@ -2117,7 +2117,7 @@ tr.row-bad td {
 /* ---------- Downtime reason buttons: Man | Machine | Material | Others ---------- */
 .reason-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(var(--reason-cols, 4), minmax(0, 1fr));
   gap: 10px;
 }
 .reason-grid.invalid {
@@ -2205,4 +2205,58 @@ tr.row-bad td {
 .known-formula {
   white-space: pre-wrap;
   margin: 0 0 4px;
+}
+
+/* Wastage: one box per selected reason */
+.wastage-boxes {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 10px 14px;
+  margin-top: 14px;
+}
+.wastage-box {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+  min-width: 0;
+}
+.wastage-box .field {
+  flex: 1;
+  min-width: 0;
+}
+fieldset.colour-set.invalid {
+  border-color: var(--danger);
+}
+@media (max-width: 600px) {
+  .wastage-boxes {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Master reason lists: category chosen first */
+.category-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+.category-tabs button {
+  background: var(--surface);
+  border: 1px solid #d4d8de;
+  color: var(--navy);
+  min-height: 42px;
+}
+.category-tabs button.on {
+  background: var(--navy);
+  border-color: var(--navy);
+  color: #fff;
+}
+.category-tabs .count {
+  display: inline-block;
+  min-width: 22px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: rgba(127, 127, 127, 0.18);
+  font-size: 12px;
+  line-height: 20px;
 }

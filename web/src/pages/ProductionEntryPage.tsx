@@ -14,6 +14,9 @@ import {
   UNIT_COUNT,
   applyAutoStarts,
   autoChanges,
+  DOWNTIME_COLUMNS,
+  WASTAGE_COLUMNS,
+  downtimeGroupLabel,
   autoStartOf,
   changeoverRequired,
   changeoverTotals,
@@ -39,6 +42,8 @@ import {
 } from '../lib/production'
 import type {
   DowntimeDbRow,
+  DowntimeGroup,
+  WastageGroup,
   EntryRow,
   EntryState,
   FieldError,
@@ -52,8 +57,8 @@ import type { Machine } from '../lib/types'
 import { plantDate } from '../lib/dates'
 import { OrderPicker } from '../components/OrderPicker'
 import { ScanButton } from '../components/ScanButton'
-import { DowntimeReasonPicker } from '../components/DowntimeReasons'
-import { reasonGroup, useDowntimeReasons } from '../lib/downtime'
+import { ReasonPicker } from '../components/DowntimeReasons'
+import { reasonGroup, useReasons } from '../lib/downtime'
 import { TimeCard } from '../components/TimeCard'
 import { Modal } from '../components/Modal'
 import { useToast } from '../components/Toast'
@@ -158,8 +163,8 @@ function EntryEditor({ entryId }: { entryId: string | null }) {
   const qcs = useOptions('qc_executives')
   const coatings = useOptions('coatings')
   const papers = useOptions('paper_types')
-  const reasons = useOptions('wastage_reasons')
-  const downtimeReasons = useDowntimeReasons()
+  const downtimeReasons = useReasons<DowntimeGroup>('downtime_reasons')
+  const wastageReasons = useReasons<WastageGroup>('wastage_reasons')
   const [timeline, setTimeline] = useState<Timeline | null>(null)
   // Latest order status, for rules applied inside state updates.
   const statusRef = useRef<OrderStatus | null>(null)
@@ -309,12 +314,23 @@ function EntryEditor({ entryId }: { entryId: string | null }) {
   }, [dirty])
 
   // ---- Changing values ------------------------------------------------------------
+  // A field's red error goes away as soon as the user changes that field (the save
+  // checks everything again). Sheet figures are checked together, so changing any
+  // of them clears the Total Given Sheets balance error too.
+  const clearErrors = useCallback((fields: string[]) => {
+    const set = new Set(fields)
+    if (['total_sheets', 'ok_sheets', 'separate_sheets', 'wastage'].some((f) => set.has(f))) set.add('total_sheets')
+    if (set.has('planned_colours')) set.add('unit_colours')
+    setErrors((list) => (list.some((e) => e.field && set.has(e.field)) ? list.filter((e) => !e.field || !set.has(e.field)) : list))
+  }, [])
+
   const update = useCallback(
     (patch: Partial<EntryState>) => {
       setSt((s) => withAuto({ ...s, ...patch }))
+      clearErrors(Object.keys(patch))
       touch()
     },
-    [withAuto, touch],
+    [withAuto, touch, clearErrors],
   )
 
   const machineChoices = useMemo(
@@ -353,6 +369,9 @@ function EntryEditor({ entryId }: { entryId: string | null }) {
     const s = await fetchStatus(orderNo, st.machine_id)
     if (!s) return
     const job = s.job ?? s.last_entry_job
+    if (job) {
+      clearErrors(['job_name', 'category', 'ups', 'job_type', 'paper_type_id', 'planned_quantity', 'cso_no', 'coating_id', 'print_side', 'planned_colours'])
+    }
     setSt((cur) => {
       let next: EntryState = { ...cur, order_no: orderNo }
       if (job) {
@@ -378,6 +397,7 @@ function EntryEditor({ entryId }: { entryId: string | null }) {
 
   function chooseSide(side: string) {
     setSt((cur) => withAuto(sideColours({ ...cur, print_side: side }, statusRef.current, false)))
+    clearErrors(['print_side', 'planned_colours'])
     touch()
   }
 
@@ -392,11 +412,13 @@ function EntryEditor({ entryId }: { entryId: string | null }) {
       else if (startChanged && !manual.includes(key)) manual = [...manual, key]
       return withAuto({ ...cur, [key]: span, manual_starts: manual })
     })
+    clearErrors([key])
     touch()
   }
 
   function resetStart(key: StepKey) {
     setSt((cur) => withAuto({ ...cur, manual_starts: cur.manual_starts.filter((k) => k !== key) }))
+    clearErrors([key])
     touch()
   }
 
@@ -948,7 +970,7 @@ function EntryEditor({ entryId }: { entryId: string | null }) {
       {st.downtime.map((d, i) => {
         const minutes = spanComplete(d.span) ? (stampMs(d.span.end)! - stampMs(d.span.start)!) / 60000 : null
         const where = downtimePlacement(st, d)
-        const group = reasonGroup(downtimeReasons, d.reason_id)
+        const group = downtimeGroupLabel(reasonGroup(downtimeReasons, d.reason_id))
         const setRow = (patch: Partial<typeof d>) => update({ downtime: st.downtime.map((x, j) => (j === i ? { ...x, ...patch } : x)) })
         return (
           <div key={i} className="downtime-row">
@@ -971,7 +993,14 @@ function EntryEditor({ entryId }: { entryId: string | null }) {
             </div>
             <div className="field">
               <span>Reason * (click one)</span>
-              <DowntimeReasonPicker reasons={downtimeReasons} value={d.reason_id} disabled={readOnly} onChange={(id) => setRow({ reason_id: id })} />
+              <ReasonPicker
+                groups={DOWNTIME_COLUMNS}
+                reasons={downtimeReasons}
+                selected={[d.reason_id]}
+                disabled={readOnly}
+                label={`Reason for downtime ${i + 1}`}
+                onToggle={(id) => setRow({ reason_id: id })}
+              />
             </div>
             <TimeCard
               title={group ? `Downtime – ${group}` : 'Downtime'}
@@ -1038,54 +1067,67 @@ function EntryEditor({ entryId }: { entryId: string | null }) {
         </Field>
       </div>
 
-      <fieldset className="colour-set">
+      <fieldset className={`colour-set${errorOf('wastage') ? ' invalid' : ''}`}>
         <legend>Wastage</legend>
-        {st.wastage.map((w, i) => (
-          <div key={i} className="wastage-row">
-            <label className="field">
-              <span>Wastage Sheets</span>
-              <input
-                inputMode="numeric"
-                value={w.quantity}
-                disabled={readOnly}
-                maxLength={8}
-                onChange={(e) => update({ wastage: st.wastage.map((x, j) => (j === i ? { ...x, quantity: digits(e.target.value) } : x)) })}
-              />
-            </label>
-            <label className="field">
-              <span>Wastage Reason{w.quantity ? ' *' : ''}</span>
-              <select
-                value={w.reason_id}
-                disabled={readOnly}
-                onChange={(e) => update({ wastage: st.wastage.map((x, j) => (j === i ? { ...x, reason_id: e.target.value } : x)) })}
-              >
-                <option value="">Select…</option>
-                {choices(reasons, w.reason_id).map((r) => (
-                  <option key={r.id} value={r.id}>
-                    {r.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-            {!readOnly && (
-              <button
-                type="button"
-                className="icon-button danger-text"
-                aria-label={`Remove wastage row ${i + 1}`}
-                title="Remove row"
-                onClick={() =>
-                  update({ wastage: st.wastage.length > 1 ? st.wastage.filter((_, j) => j !== i) : [{ quantity: '', reason_id: '' }] })
-                }
-              >
-                <Trash2 size={17} />
-              </button>
-            )}
+        <p className="muted small">
+          Click every reason that caused wastage (click again to remove it), then enter the wastage sheets for each one below.
+        </p>
+        <ReasonPicker
+          groups={WASTAGE_COLUMNS}
+          reasons={wastageReasons}
+          selected={st.wastage.map((w) => w.reason_id).filter(Boolean)}
+          multiple
+          disabled={readOnly}
+          label="Wastage reasons"
+          onToggle={(id) =>
+            update({
+              wastage: st.wastage.some((w) => w.reason_id === id)
+                ? st.wastage.filter((w) => w.reason_id !== id)
+                : [...st.wastage, { quantity: '', reason_id: id }],
+            })
+          }
+        />
+        {st.wastage.length === 0 ? (
+          <p className="empty">No wastage reason selected.</p>
+        ) : (
+          <div className="wastage-boxes">
+            {st.wastage.map((w, i) => {
+              const name = wastageReasons.find((r) => r.id === w.reason_id)?.name ?? (w.reason_id ? 'Reason' : 'Reason not chosen')
+              return (
+                <div key={w.reason_id || `blank-${i}`} className="wastage-box">
+                  <label className="field">
+                    <span>
+                      {i + 1}. {name} *
+                    </span>
+                    <input
+                      inputMode="numeric"
+                      value={w.quantity}
+                      disabled={readOnly}
+                      maxLength={8}
+                      placeholder="Wastage sheets"
+                      onChange={(e) => update({ wastage: st.wastage.map((x, j) => (j === i ? { ...x, quantity: digits(e.target.value) } : x)) })}
+                    />
+                  </label>
+                  {!readOnly && (
+                    <button
+                      type="button"
+                      className="icon-button danger-text"
+                      aria-label={`Remove ${name}`}
+                      title="Remove"
+                      onClick={() => update({ wastage: st.wastage.filter((_, j) => j !== i) })}
+                    >
+                      <Trash2 size={17} />
+                    </button>
+                  )}
+                </div>
+              )
+            })}
           </div>
-        ))}
-        {!readOnly && st.wastage.length < 20 && (
-          <button type="button" className="small" onClick={() => update({ wastage: [...st.wastage, { quantity: '', reason_id: '' }] })}>
-            <Plus size={15} /> Add wastage row
-          </button>
+        )}
+        {st.wastage.length > 0 && (
+          <p className="muted small">
+            Total wastage: <b>{formatNumber(wasteTotal)}</b> sheets
+          </p>
         )}
         {errorOf('wastage') && <p className="field-error">{errorOf('wastage')}</p>}
       </fieldset>
@@ -1097,7 +1139,7 @@ function EntryEditor({ entryId }: { entryId: string | null }) {
           {total ? (total === accounted ? ' · Balanced' : ` · Difference ${formatNumber(total - accounted)}`) : ''}
         </span>
       </div>
-      <p className="muted small">Total Given Sheets must equal OK + Separate + all wastage rows exactly.</p>
+      <p className="muted small">Total Given Sheets must equal OK + Separate + all wastage exactly.</p>
 
       <Field label="Remarks" error={errorOf('remarks')}>
         <textarea rows={3} maxLength={1000} value={st.remarks} disabled={readOnly} onChange={(e) => update({ remarks: e.target.value })} />
@@ -1396,7 +1438,7 @@ function TimelinePanel({ timeline, machineCode, submitted }: { timeline: Timelin
       )}
       {timeline.downtime.map((d) => (
         <p key={d.id}>
-          Downtime{d.kind ? ` (${d.kind})` : ''} between jobs: {formatMoment(d.start_at)} – {formatMoment(d.end_at)} ({formatDuration(d.minutes)}
+          Downtime{d.kind ? ` (${downtimeGroupLabel(d.kind)})` : ''} between jobs: {formatMoment(d.start_at)} – {formatMoment(d.end_at)} ({formatDuration(d.minutes)}
           {d.reason ? `, ${d.reason}` : ''})
         </p>
       ))}
@@ -1408,7 +1450,7 @@ function TimelinePanel({ timeline, machineCode, submitted }: { timeline: Timelin
       )}
       {timeline.open_downtime.map((d) => (
         <p key={d.id} className="warn-text">
-          Open downtime{d.kind ? ` (${d.kind})` : ''} since {formatMoment(d.start_at)}: the machine is still recorded as down.
+          Open downtime{d.kind ? ` (${downtimeGroupLabel(d.kind)})` : ''} since {formatMoment(d.start_at)}: the machine is still recorded as down.
           Close it under Production → Downtime.
         </p>
       ))}

@@ -6,14 +6,14 @@ import { supabase } from '../lib/supabase'
 import { useAuth } from '../lib/auth'
 import { friendlyError } from '../lib/errors'
 import { formatDate } from '../lib/jobs'
-import { DOWNTIME_GROUPS, entryLabel, formatDuration, formatMoment, isoToStamp, nowStamp, spanMinutes, stampToIso } from '../lib/production'
+import { DOWNTIME_COLUMNS, DOWNTIME_GROUPS, downtimeGroupLabel, entryLabel, formatDuration, formatMoment, isoToStamp, nowStamp, spanMinutes, stampToIso } from '../lib/production'
 import type { DowntimeGroup, Span } from '../lib/production'
 import type { Machine } from '../lib/types'
 import { TimeCard } from '../components/TimeCard'
 import { ConfirmDialog, Modal } from '../components/Modal'
 import { useToast } from '../components/Toast'
-import { DowntimeReasonPicker } from '../components/DowntimeReasons'
-import { useDowntimeReasons } from '../lib/downtime'
+import { ReasonPicker } from '../components/DowntimeReasons'
+import { useReasons } from '../lib/downtime'
 
 const PAGE_SIZE = 15
 
@@ -119,7 +119,7 @@ export function DowntimePage() {
     }
   }
 
-  const headers = ['S.No', 'Date', 'Shift', 'Machine', 'Start', 'End', 'Duration', 'Type', 'Reason', 'Job', 'Remarks', '']
+  const headers = ['S.No', 'Date', 'Shift', 'Machine', 'Start', 'End', 'Duration', 'Category', 'Reason', 'Job', 'Remarks', '']
 
   return (
     <>
@@ -147,11 +147,11 @@ export function DowntimePage() {
               </option>
             ))}
           </select>
-          <select value={filters.group} onChange={(e) => setFilter('group', e.target.value)} aria-label="Type filter">
-            <option value="">All types</option>
+          <select value={filters.group} onChange={(e) => setFilter('group', e.target.value)} aria-label="Category filter">
+            <option value="">All categories</option>
             {DOWNTIME_GROUPS.map((g) => (
               <option key={g} value={g}>
-                {g}
+                {downtimeGroupLabel(g)}
               </option>
             ))}
           </select>
@@ -205,7 +205,7 @@ export function DowntimePage() {
                       <td>{formatMoment(r.start_at)}</td>
                       <td>{r.end_at ? formatMoment(r.end_at) : <span className="badge amber">Still down</span>}</td>
                       <td>{formatDuration(r.minutes)}</td>
-                      <td>{r.kind ?? r.downtime_reasons?.category}</td>
+                      <td>{downtimeGroupLabel(r.kind ?? r.downtime_reasons?.category)}</td>
                       <td>{r.downtime_reasons?.name}</td>
                       <td>
                         {between ? (
@@ -302,7 +302,7 @@ function OutsideForm({ row, machines, onClose, onSaved }: FormProps) {
   )
   const [reasonId, setReasonId] = useState(row?.reason_id ?? '')
   const [remarks, setRemarks] = useState(row?.remarks ?? '')
-  const reasons = useDowntimeReasons()
+  const reasons = useReasons<DowntimeGroup>('downtime_reasons')
   const [myMachines, setMyMachines] = useState<string[] | null>(null)
   const [errors, setErrors] = useState<string[]>([])
   const [busy, setBusy] = useState(false)
@@ -383,7 +383,7 @@ function OutsideForm({ row, machines, onClose, onSaved }: FormProps) {
         </div>
         <div className="field">
           <span>Reason * (click one)</span>
-          <DowntimeReasonPicker reasons={reasons} value={reasonId} onChange={setReasonId} />
+          <ReasonPicker groups={DOWNTIME_COLUMNS} reasons={reasons} selected={[reasonId]} label="Downtime reason" onToggle={setReasonId} />
         </div>
         <TimeCard title="Downtime" span={span} onChange={setSpan} />
         <p className="muted small">Leave End empty while the machine is still down, and fill it in when it is working again.</p>
