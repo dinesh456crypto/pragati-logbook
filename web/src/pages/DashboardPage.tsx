@@ -117,26 +117,32 @@ export function DashboardPage() {
     }
   }, [from, to, machineId, rangeError])
 
-  // Planned jobs in the date range (by plan date). Planned jobs are not tied to a machine.
+  // Planned jobs in the date range (by plan date), of the chosen machine.
   useEffect(() => {
     if (rangeError || !canSeeJobs) return
     let alive = true
-    const inRange = <T extends { gte: (c: string, v: string) => T; lte: (c: string, v: string) => T }>(q: T) => {
-      let r = q
-      if (from) r = r.gte('plan_date', from)
-      if (to) r = r.lte('plan_date', to)
-      return r
+    let counter = supabase.from('production_jobs').select('id', { count: 'exact', head: true })
+    let latest = supabase
+      .from('production_jobs')
+      .select('id, plan_date, order_no, job_name, quantity')
+      .order('plan_date', { ascending: false })
+      .order('created_at', { ascending: false })
+      .limit(5)
+    if (from) {
+      counter = counter.gte('plan_date', from)
+      latest = latest.gte('plan_date', from)
+    }
+    if (to) {
+      counter = counter.lte('plan_date', to)
+      latest = latest.lte('plan_date', to)
+    }
+    if (machineId) {
+      counter = counter.eq('machine_id', machineId)
+      latest = latest.eq('machine_id', machineId)
     }
     Promise.all([
-      inRange(supabase.from('production_jobs').select('id', { count: 'exact', head: true })),
-      inRange(
-        supabase
-          .from('production_jobs')
-          .select('id, plan_date, order_no, job_name, quantity')
-          .order('plan_date', { ascending: false })
-          .order('created_at', { ascending: false })
-          .limit(5),
-      ),
+      counter,
+      latest,
     ]).then(([counted, recent]) => {
       if (!alive) return
       setPlannedCount(counted.error ? null : (counted.count ?? 0))
@@ -145,7 +151,7 @@ export function DashboardPage() {
     return () => {
       alive = false
     }
-  }, [from, to, rangeError, canSeeJobs])
+  }, [from, to, machineId, rangeError, canSeeJobs])
 
   function reset() {
     setMachine('ALL')
@@ -155,7 +161,7 @@ export function DashboardPage() {
 
   const t = figures?.totals
   const metrics: { label: string; value: string; hint: string }[] = [
-    { label: 'Total Planned Jobs', value: plannedCount === null ? '—' : formatNumber(plannedCount), hint: 'All machines · by plan date' },
+    { label: 'Total Planned Jobs', value: plannedCount === null ? '—' : formatNumber(plannedCount), hint: `${machineId ? machines.find((m) => m.id === machineId)?.code ?? 'Machine' : 'All machines'} · by plan date` },
     { label: 'Total Jobs Ran', value: t ? formatNumber(t.jobs_ran) : '—', hint: t ? `${formatNumber(t.entries)} submitted entries` : 'Unique orders' },
     {
       label: 'Total Changeover Time',

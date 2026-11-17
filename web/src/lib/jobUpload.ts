@@ -18,6 +18,7 @@ interface Column {
 
 export const COLUMNS: Column[] = [
   { key: 'plan_date', header: 'Date', width: 14, required: true, note: 'Production plan date. Type as dd-mm-yyyy (e.g. 16-11-2026) or pick a date.', example: '16-11-2026' },
+  { key: 'machine', header: 'Machine', width: 12, required: true, note: 'Choose from the list (Machine ID from the Machines master). The production order runs only on this machine.', example: '' },
   { key: 'order_no', header: 'Production Order Number', width: 20, required: true, note: 'Up to 60 characters. Must be new: not already planned and not repeated in this file.', example: 'PO-2026-0451' },
   { key: 'cso_no', header: 'CSO Number', width: 16, required: true, note: 'Customer Sales Order number, up to 60 characters. Several jobs can share one CSO Number.', example: 'CSO-7781' },
   { key: 'job_name', header: 'Job Name', width: 34, required: true, note: 'Up to 150 characters.', example: 'Sweet Box 500g' },
@@ -35,6 +36,7 @@ export const COLUMNS: Column[] = [
 export interface UploadRow {
   row: number
   plan_date: string
+  machine: string
   order_no: string
   cso_no: string
   job_name: string
@@ -58,6 +60,7 @@ export interface RowError {
 // Database field names → template column names.
 const FIELD_COLUMN: Record<string, string> = {
   plan_date: 'Date',
+  machine_id: 'Machine',
   order_no: 'Production Order Number',
   cso_no: 'CSO Number',
   job_name: 'Job Name',
@@ -96,12 +99,13 @@ function headerCell(ws: Worksheet, row: number, col: number, text: string, fill:
 }
 
 // The template: Instructions, Jobs (to fill in), Sample and Lists (dropdown values).
-export async function buildTemplate(papers: string[], coatings: string[]): Promise<Blob> {
+export async function buildTemplate(papers: string[], coatings: string[], machines: string[]): Promise<Blob> {
   const ExcelJS = await excel()
   const wb: Workbook = new ExcelJS.Workbook()
   wb.creator = 'Pragati Production Logbook'
   const paperList = papers.length ? papers : ['(add paper types in Master)']
   const coatingList = coatings.length ? coatings : ['(add coatings in Master)']
+  const machineList = machines.length ? machines : ['(add machines in Master)']
 
   // Instructions
   const ins = wb.addWorksheet('Instructions', { properties: { tabColor: { argb: TEAL } } })
@@ -110,7 +114,7 @@ export async function buildTemplate(papers: string[], coatings: string[]): Promi
   ins.getCell('A1').font = { bold: true, size: 15, color: { argb: NAVY } }
   const steps = [
     `1. Fill one job per row on the "Jobs" sheet (up to ${MAX_ROWS} rows). Do not rename, move or delete the columns.`,
-    '2. Columns marked * are required. Use the dropdowns for Job Type, Type of Paper, Coating and Print Side.',
+    '2. Columns marked * are required. Use the dropdowns for Machine, Job Type, Type of Paper, Coating and Print Side.',
     '3. Save the file and upload it in Production Plan → Job Details → Bulk Upload.',
     '4. The app checks every row first. If any row has a mistake, nothing is imported: fix the rows shown and upload again.',
     '5. Only new Production Order Numbers can be uploaded; jobs already planned are not changed. A CSO Number may repeat across jobs.',
@@ -121,7 +125,7 @@ export async function buildTemplate(papers: string[], coatings: string[]): Promi
   ;['Column', 'Required', 'What to enter', 'Example'].forEach((h, i) => headerCell(ins, r, i + 1, h, NAVY))
   r++
   for (const c of COLUMNS) {
-    const vals = [c.header, c.required ? 'Yes' : 'If F/S + B/S', c.note, c.key === 'paper_type' ? paperList[0] : c.key === 'coating' ? coatingList[0] : c.example]
+    const vals = [c.header, c.required ? 'Yes' : 'If F/S + B/S', c.note, c.key === 'paper_type' ? paperList[0] : c.key === 'coating' ? coatingList[0] : c.key === 'machine' ? machineList[0] : c.example]
     vals.forEach((v, i) => {
       const cell = ins.getCell(r, i + 1)
       cell.value = v
@@ -163,7 +167,7 @@ export async function buildTemplate(papers: string[], coatings: string[]): Promi
   ins.getCell(r, 1).font = { bold: true, color: { argb: TEAL } }
 
   // Jobs
-  const ws = wb.addWorksheet('Jobs', { properties: { tabColor: { argb: NAVY } }, views: [{ state: 'frozen', xSplit: 2, ySplit: 1 }] })
+  const ws = wb.addWorksheet('Jobs', { properties: { tabColor: { argb: NAVY } }, views: [{ state: 'frozen', xSplit: 3, ySplit: 1 }] })
   ws.columns = COLUMNS.map((c) => ({ width: c.width }))
   COLUMNS.forEach((c, i) => {
     const cell = headerCell(ws, 1, i + 1, c.header + (c.required ? ' *' : ''), c.required ? NAVY : TEAL)
@@ -176,6 +180,7 @@ export async function buildTemplate(papers: string[], coatings: string[]): Promi
   const letter = (key: keyof UploadRow) => String.fromCharCode(65 + COLUMNS.findIndex((c) => c.key === key))
   const rules2: Record<string, object> = {
     [letter('plan_date')]: { type: 'date', operator: 'greaterThan', formulae: [new Date(Date.UTC(2020, 0, 1))], error: 'Enter a valid date, e.g. 16-11-2026.', errorTitle: 'Date' },
+    [letter('machine')]: { type: 'list', formulae: listRef('E', machineList.length), error: 'Choose a machine from the list (Machines master).', errorTitle: 'Machine' },
     [letter('order_no')]: { type: 'textLength', operator: 'between', formulae: [1, 60], error: '1 to 60 characters.', errorTitle: 'Production Order Number' },
     [letter('cso_no')]: { type: 'textLength', operator: 'between', formulae: [1, 60], error: '1 to 60 characters.', errorTitle: 'CSO Number' },
     [letter('job_name')]: { type: 'textLength', operator: 'between', formulae: [1, 150], error: '1 to 150 characters.', errorTitle: 'Job Name' },
@@ -207,10 +212,12 @@ export async function buildTemplate(papers: string[], coatings: string[]): Promi
   const p1 = paperList[paperList.length - 1]
   const c0 = coatingList[0]
   const c1 = coatingList[coatingList.length - 1]
+  const k0 = machineList[0]
+  const k1 = machineList[machineList.length - 1]
   const samples: (string | number | Date)[][] = [
-    [new Date(Date.UTC(2026, 10, 16)), 'PO-2026-0451', 'CSO-7781', 'Sweet Box 500g', 'Carton', 6, 'NEW', p0, c0, 12000, 'F/S + B/S', 'C, M, Y, K, PMS 185', 'K, PMS 286'],
-    [new Date(Date.UTC(2026, 10, 16)), 'PO-2026-0452', 'CSO-7781', 'Medicine Mono Carton', 'Pharma', 8, 'Re-Print', p1, c1, 20000, 'O/S', 'C, M, Y, K, Gold, Varnish', ''],
-    [new Date(Date.UTC(2026, 10, 17)), 'PO-2026-0453', 'CSO-7790', 'Gift Box Lid', 'Rigid Box', 4, 'NPD', p0, c0, 5000, 'B/B', 'K, PMS 185', ''],
+    [new Date(Date.UTC(2026, 10, 16)), k0, 'PO-2026-0451', 'CSO-7781', 'Sweet Box 500g', 'Carton', 6, 'NEW', p0, c0, 12000, 'F/S + B/S', 'C, M, Y, K, PMS 185', 'K, PMS 286'],
+    [new Date(Date.UTC(2026, 10, 16)), k1, 'PO-2026-0452', 'CSO-7781', 'Medicine Mono Carton', 'Pharma', 8, 'Re-Print', p1, c1, 20000, 'O/S', 'C, M, Y, K, Gold, Varnish', ''],
+    [new Date(Date.UTC(2026, 10, 17)), k0, 'PO-2026-0453', 'CSO-7790', 'Gift Box Lid', 'Rigid Box', 4, 'NPD', p0, c0, 5000, 'B/B', 'K, PMS 185', ''],
   ]
   samples.forEach((s, n) =>
     s.forEach((v, i) => {
@@ -223,19 +230,20 @@ export async function buildTemplate(papers: string[], coatings: string[]): Promi
 
   // Lists
   const ls = wb.addWorksheet('Lists', { properties: { tabColor: { argb: 'FF9AA9B5' } } })
-  ls.columns = [{ width: 18 }, { width: 24 }, { width: 18 }, { width: 24 }, { width: 4 }, { width: 80 }]
+  ls.columns = [{ width: 18 }, { width: 24 }, { width: 18 }, { width: 24 }, { width: 14 }, { width: 4 }, { width: 80 }]
   const lists: [string, readonly string[]][] = [
     ['Job Type', JOB_TYPES],
     ['Type of Paper', paperList],
     ['Print Side', UPLOAD_SIDES],
     ['Coating', coatingList],
+    ['Machine', machineList],
   ]
   lists.forEach(([h, vals], i) => {
     headerCell(ls, 1, i + 1, h, NAVY)
     vals.forEach((v, j) => (ls.getCell(j + 2, i + 1).value = v))
   })
-  ls.getCell('F1').value = 'These lists feed the dropdowns on the Jobs sheet. Please do not edit them: download a new template after adding paper types or coatings in the Master.'
-  ls.getCell('F1').font = { italic: true, color: { argb: MUTED } }
+  ls.getCell('G1').value = 'These lists feed the dropdowns on the Jobs sheet. Please do not edit them: download a new template after adding machines, paper types or coatings in the Master.'
+  ls.getCell('G1').font = { italic: true, color: { argb: MUTED } }
 
   wb.views = [{ activeTab: 1, x: 0, y: 0, width: 20000, height: 12000, firstSheet: 0, visibility: 'visible' }]
   const buffer = await wb.xlsx.writeBuffer()
@@ -341,6 +349,7 @@ export async function readUpload(file: File): Promise<ParsedFile> {
     rows.push({
       row: r,
       plan_date: toIsoDate(get('plan_date')),
+      machine: cellText(get('machine')).trim(),
       order_no: cellText(get('order_no')).trim(),
       cso_no: cellText(get('cso_no')).trim(),
       job_name: cellText(get('job_name')).trim(),

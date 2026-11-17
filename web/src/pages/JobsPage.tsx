@@ -20,6 +20,7 @@ import {
   tidy,
 } from '../lib/jobs'
 import type { Job } from '../lib/jobs'
+import type { Machine } from '../lib/types'
 import { ConfirmDialog, Modal } from '../components/Modal'
 import { ScanButton } from '../components/ScanButton'
 import { JobBulkUpload } from '../components/JobBulkUpload'
@@ -56,6 +57,8 @@ export function JobsPage() {
   const [reload, setReload] = useState(0)
   const [papers, setPapers] = useState<PaperType[]>([])
   const [coatings, setCoatings] = useState<Coating[]>([])
+  const [machines, setMachines] = useState<Machine[]>([])
+  const [machineFilter, setMachineFilter] = useState('')
   // The dashboard's "New Job" button opens the form straight away (?new=1).
   const [open, setOpen] = useState<{ job: Job | null; mode: 'view' | 'edit'; orderNo?: string } | null>(() =>
     params.get('new') === '1' && canCreate ? { job: null, mode: 'edit' } : null,
@@ -89,6 +92,7 @@ export function JobsPage() {
       .range((page - 1) * PAGE_SIZE, page * PAGE_SIZE - 1)
     if (from) q = q.gte('plan_date', from)
     if (to) q = q.lte('plan_date', to)
+    if (machineFilter) q = q.eq('machine_id', machineFilter)
     if (query) {
       const p = searchPattern(query)
       q = q.or(`order_no.ilike.${p},cso_no.ilike.${p},job_name.ilike.${p},category.ilike.${p}`)
@@ -106,7 +110,7 @@ export function JobsPage() {
     return () => {
       alive = false
     }
-  }, [page, from, to, query, reload, rangeError])
+  }, [page, from, to, machineFilter, query, reload, rangeError])
 
   useEffect(() => {
     supabase
@@ -119,6 +123,12 @@ export function JobsPage() {
       .select('id, name, active')
       .order('name')
       .then(({ data }) => setCoatings((data ?? []) as Coating[]))
+    supabase
+      .from('machines')
+      .select('id, code, name, active, default_speed, sort_order')
+      .order('sort_order')
+      .order('code')
+      .then(({ data }) => setMachines((data ?? []) as Machine[]))
   }, [])
 
   // A scanned production order number opens that job, or starts a new job with the number filled in.
@@ -138,7 +148,7 @@ export function JobsPage() {
   }
 
   const pages = Math.max(1, Math.ceil(total / PAGE_SIZE))
-  const filtersOn = Boolean(typed || from || to)
+  const filtersOn = Boolean(typed || from || to || machineFilter)
 
   function refresh() {
     setReload((n) => n + 1)
@@ -166,20 +176,22 @@ export function JobsPage() {
     }
   }
 
-  const headers = ['S.No', 'Date', 'Prod. Order No', 'CSO No', 'Job Name', 'Category', 'Print Sides', 'UPS', 'Job Type', 'Paper Type', 'Coating', 'Qty (Sheets)', '']
+  const headers = ['S.No', 'Date', 'Machine', 'Prod. Order No', 'CSO No', 'Job Name', 'Category', 'Print Sides', 'UPS', 'Job Type', 'Paper Type', 'Coating', 'Qty (Sheets)', '']
 
-  // The template's Type of Paper and Coating lists are the masters at download time.
+  // The template's Machine, Type of Paper and Coating lists are the masters at download time.
   async function downloadTemplate() {
     setTemplateBusy(true)
     try {
-      const [paperRes, coatingRes] = await Promise.all([
+      const [paperRes, coatingRes, machineRes] = await Promise.all([
         supabase.from('paper_types').select('name').eq('active', true).order('name'),
         supabase.from('coatings').select('name').eq('active', true).order('name'),
+        supabase.from('machines').select('code').eq('active', true).order('sort_order').order('code'),
       ])
-      const error = paperRes.error ?? coatingRes.error
+      const error = paperRes.error ?? coatingRes.error ?? machineRes.error
       if (error) throw new Error(friendlyError(error))
       const names = (d: unknown) => ((d ?? []) as { name: string }[]).map((p) => p.name)
-      const blob = await buildTemplate(names(paperRes.data), names(coatingRes.data))
+      const codes = ((machineRes.data ?? []) as { code: string }[]).map((m) => m.code)
+      const blob = await buildTemplate(names(paperRes.data), names(coatingRes.data), codes)
       saveBlob(blob, 'Pragati Job Details Bulk Upload Template.xlsx')
     } catch (err) {
       notify('error', `Could not create the template: ${(err as Error).message}`)
@@ -227,6 +239,21 @@ export function JobsPage() {
               aria-label="Search"
             />
           </label>
+          <select
+            value={machineFilter}
+            onChange={(e) => {
+              setMachineFilter(e.target.value)
+              setPage(1)
+            }}
+            aria-label="Machine filter"
+          >
+            <option value="">All machines</option>
+            {machines.map((m) => (
+              <option key={m.id} value={m.id}>
+                {m.code}
+              </option>
+            ))}
+          </select>
           <label className="inline-field">
             <span>From</span>
             <input
@@ -261,6 +288,7 @@ export function JobsPage() {
                 setQuery('')
                 setFrom('')
                 setTo('')
+                setMachineFilter('')
                 setPage(1)
               }}
             >
@@ -298,6 +326,7 @@ export function JobsPage() {
                   <tr key={j.id} className="clickable" onClick={() => setOpen({ job: j, mode: 'view' })}>
                     <td>{(page - 1) * PAGE_SIZE + i + 1}</td>
                     <td>{formatDate(j.plan_date)}</td>
+                    <td>{j.machines?.code ?? <span className="muted">—</span>}</td>
                     <td>
                       <b>{j.order_no}</b>
                     </td>
@@ -374,6 +403,7 @@ export function JobsPage() {
           canEdit={canEdit}
           papers={papers}
           coatings={coatings}
+          machines={machines}
           initialOrderNo={open.orderNo}
           onEdit={() => setOpen({ job: open.job, mode: 'edit' })}
           onClose={() => setOpen(null)}
@@ -428,6 +458,7 @@ interface FormProps {
   canEdit: boolean
   papers: PaperType[]
   coatings: Coating[]
+  machines: Machine[]
   initialOrderNo?: string
   onEdit: () => void
   onClose: () => void
@@ -454,8 +485,9 @@ type SaveReply =
   | { ok: false; code: 'INVALID'; errors: { field: string; message: string }[] }
   | { ok: false; code: 'STALE'; message: string }
 
-function JobForm({ job, readOnly, canEdit, papers, coatings, initialOrderNo, onEdit, onClose, onSaved }: FormProps) {
+function JobForm({ job, readOnly, canEdit, papers, coatings, machines, initialOrderNo, onEdit, onClose, onSaved }: FormProps) {
   const [date, setDate] = useState(job?.plan_date ?? plantDate())
+  const [machineId, setMachineId] = useState(job?.machine_id ?? '')
   const [orderNo, setOrderNo] = useState(job?.order_no ?? initialOrderNo ?? '')
   const [csoNo, setCsoNo] = useState(job?.cso_no ?? '')
   const [coatingId, setCoatingId] = useState(job?.coating_id ?? '')
@@ -486,6 +518,10 @@ function JobForm({ job, readOnly, canEdit, papers, coatings, initialOrderNo, onE
     () => papers.filter((p) => p.active || p.id === job?.paper_type_id),
     [papers, job?.paper_type_id],
   )
+  const machineOptions = useMemo(
+    () => machines.filter((m) => m.active || m.id === job?.machine_id),
+    [machines, job?.machine_id],
+  )
   const coatingOptions = useMemo(
     () => coatings.filter((c) => c.active || c.id === job?.coating_id),
     [coatings, job?.coating_id],
@@ -505,6 +541,7 @@ function JobForm({ job, readOnly, canEdit, papers, coatings, initialOrderNo, onE
       order_no: tidy(orderNo),
       cso_no: tidy(csoNo),
       coating_id: coatingId || null,
+      machine_id: machineId || null,
       job_name: tidy(jobName),
       category: tidy(category) || null,
       ups: Number(ups),
@@ -571,6 +608,19 @@ function JobForm({ job, readOnly, canEdit, papers, coatings, initialOrderNo, onE
           <label className="field">
             <span>Date *</span>
             <input type="date" value={date} onChange={(e) => setDate(e.target.value)} disabled={readOnly} />
+          </label>
+          <label className="field">
+            <span>Machine *</span>
+            <select value={machineId} onChange={(e) => setMachineId(e.target.value)} disabled={readOnly}>
+              <option value="">Select…</option>
+              {machineOptions.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.code}
+                  {m.name !== m.code ? ` · ${m.name}` : ''}
+                  {m.active ? '' : ' (inactive)'}
+                </option>
+              ))}
+            </select>
           </label>
           <div className="field">
             <span>Production Order Number *</span>

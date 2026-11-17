@@ -176,6 +176,7 @@ export function JobBulkUpload({ onClose, onImported, onTemplate, templateBusy }:
                       <th>Row</th>
                       <th />
                       <th>Date</th>
+                      <th>Machine</th>
                       <th>Prod. Order No</th>
                       <th>CSO No</th>
                       <th>Job Name</th>
@@ -198,6 +199,7 @@ export function JobBulkUpload({ onClose, onImported, onTemplate, templateBusy }:
                           <td className="num">{r.row}</td>
                           <td>{bad ? <XCircle size={16} className="danger-text" aria-label="Has mistakes" /> : <CheckCircle2 size={16} className="ok-text" aria-label="OK" />}</td>
                           <td>{r.plan_date === 'invalid' ? '?' : r.plan_date.split('-').reverse().join('-')}</td>
+                          <td>{r.machine}</td>
                           <td>{r.order_no}</td>
                           <td>{r.cso_no}</td>
                           <td>{r.job_name}</td>

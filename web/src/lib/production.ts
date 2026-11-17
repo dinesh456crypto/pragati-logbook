@@ -575,6 +575,8 @@ export interface OrderJob {
   order_no: string
   cso_no?: string | null
   coating_id?: string | null
+  machine_id?: string | null // planned jobs: the machine it runs on
+  machine_code?: string | null
   job_name: string
   category: string | null
   ups: number | null
@@ -628,6 +630,8 @@ export interface Timeline {
 export interface OrderOption {
   order_no: string
   cso_no?: string | null
+  // Production Entry: planned machine, or the machines an unplanned order ran on; empty = any machine.
+  machine_ids?: string[]
   job_name: string | null
   plan_date: string | null
   planned: boolean

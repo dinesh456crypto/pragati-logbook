@@ -46,8 +46,9 @@ await as(S, "select public.admin_save_user($1,'ravi','Ravi','operator',true,true
 const one = async (sql) => (await db.query(sql)).rows[0].id
 const paper = await one("insert into public.paper_types (name) values ('Art Card 300') returning id")
 const coat = await one("insert into public.coatings (name) values ('UV') returning id")
+const k729 = await one("select id from public.machines where code = 'K729'")
 const job = (order, sides) => as(S, 'select public.save_production_job(null,$1::jsonb,$2::jsonb) r', [JSON.stringify({ plan_date: '2026-11-10', order_no: order,
-  cso_no: 'CSO-' + order, coating_id: coat,
+  cso_no: 'CSO-' + order, coating_id: coat, machine_id: k729,
   job_name: 'Carton ' + order, category: 'Carton', ups: 4, job_type: 'NEW', paper_type_id: paper, quantity: 1000 }), JSON.stringify(sides)])
 await job('PO-1', [{ print_side: 'F/S', colours: ['C', 'M', 'Y', 'K', 'PMS 185'] }, { print_side: 'B/S', colours: ['k', 'Gold'] }])
 await job('PO-2', [{ print_side: 'O/S', colours: ['C', 'M', 'Y', 'K'] }])

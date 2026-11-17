@@ -460,6 +460,13 @@ function EntryEditor({ entryId }: { entryId: string | null }) {
   const totals = changeoverTotals(st)
   const runTimes = stepTimes(st, 'run')
   const plannedJob = status?.job ?? null
+  // Only the orders of the chosen machine: its planned jobs (older jobs without a machine
+  // run anywhere) and unplanned orders already produced on it.
+  const machineOrders = useMemo(
+    () => orders.filter((o) => !o.machine_ids?.length || o.machine_ids.includes(st.machine_id)),
+    [orders, st.machine_id],
+  )
+  const wrongMachine = Boolean(plannedJob?.machine_id && st.machine_id && plannedJob.machine_id !== st.machine_id)
   const coatingLocked = Boolean(plannedJob?.coating_id)
   const csoLocked = Boolean(plannedJob?.cso_no)
   // Worked out from the previous completed job on this machine; a submitted entry shows what was saved.
@@ -670,9 +677,22 @@ function EntryEditor({ entryId }: { entryId: string | null }) {
       </Field>
       <Field label="Production Order Number *" error={errorOf('order_no')} wide>
         <div className="with-scan">
-          <OrderPicker value={st.order_no} options={orders} disabled={readOnly} invalid={Boolean(errorOf('order_no'))} onSelect={chooseOrder} />
-          <ScanButton disabled={readOnly} onScan={(text) => chooseOrder(text.slice(0, 60))} />
+          <OrderPicker
+            value={st.order_no}
+            options={machineOrders}
+            disabled={readOnly || !st.machine_id}
+            invalid={Boolean(errorOf('order_no'))}
+            placeholder={st.machine_id ? undefined : 'Select the machine first'}
+            onSelect={chooseOrder}
+          />
+          <ScanButton disabled={readOnly || !st.machine_id} onScan={(text) => chooseOrder(text.slice(0, 60))} />
         </div>
+        {wrongMachine && (
+          <span className="field-error">
+            Production order {st.order_no} is planned for machine {plannedJob?.machine_code}. Select that machine, or choose
+            another order.
+          </span>
+        )}
       </Field>
       <Field label="CSO Number *" error={errorOf('cso_no')}>
         <input
