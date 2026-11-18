@@ -21,6 +21,8 @@ import {
 } from '../lib/jobs'
 import type { Job } from '../lib/jobs'
 import type { Machine } from '../lib/types'
+import { matchMaster, parseQrJob, scannedOrderNo } from '../lib/qr'
+import type { QrJob } from '../lib/qr'
 import { ConfirmDialog, Modal } from '../components/Modal'
 import { ScanButton } from '../components/ScanButton'
 import { JobBulkUpload } from '../components/JobBulkUpload'
@@ -60,7 +62,7 @@ export function JobsPage() {
   const [machines, setMachines] = useState<Machine[]>([])
   const [machineFilter, setMachineFilter] = useState('')
   // The dashboard's "New Job" button opens the form straight away (?new=1).
-  const [open, setOpen] = useState<{ job: Job | null; mode: 'view' | 'edit'; orderNo?: string } | null>(() =>
+  const [open, setOpen] = useState<{ job: Job | null; mode: 'view' | 'edit'; orderNo?: string; qr?: QrJob | null; qrDiff?: string[] } | null>(() =>
     params.get('new') === '1' && canCreate ? { job: null, mode: 'edit' } : null,
   )
   const [deleting, setDeleting] = useState<Job | null>(null)
@@ -131,9 +133,11 @@ export function JobsPage() {
       .then(({ data }) => setMachines((data ?? []) as Machine[]))
   }, [])
 
-  // A scanned production order number opens that job, or starts a new job with the number filled in.
+  // A scanned job card QR (or plain barcode) opens that job, or starts a new job filled
+  // in from the QR (only the number, for a plain barcode).
   async function openScanned(text: string) {
-    const orderNo = tidy(text).slice(0, 60)
+    const qr = parseQrJob(text)
+    const orderNo = tidy(scannedOrderNo(text, qr))
     if (!orderNo) return
     const { data, error } = await supabase
       .from('production_jobs')
@@ -142,8 +146,8 @@ export function JobsPage() {
       .limit(1)
     if (error) return notify('error', friendlyError(error))
     const found = (data ?? [])[0] as unknown as Job | undefined
-    if (found) setOpen({ job: found, mode: 'view' })
-    else if (canCreate) setOpen({ job: null, mode: 'edit', orderNo })
+    if (found) setOpen({ job: found, mode: 'view', qrDiff: qr ? qrDifferences(qr, found, machines, papers, coatings) : [] })
+    else if (canCreate) setOpen({ job: null, mode: 'edit', orderNo, qr })
     else notify('error', `Production order ${orderNo} is not in Job Details.`)
   }
 
@@ -405,6 +409,8 @@ export function JobsPage() {
           coatings={coatings}
           machines={machines}
           initialOrderNo={open.orderNo}
+          qr={open.qr ?? null}
+          qrDiff={open.qrDiff ?? []}
           onEdit={() => setOpen({ job: open.job, mode: 'edit' })}
           onClose={() => setOpen(null)}
           onSaved={(orderNo, isNew) => {
@@ -460,6 +466,8 @@ interface FormProps {
   coatings: Coating[]
   machines: Machine[]
   initialOrderNo?: string
+  qr?: QrJob | null // a scanned job card: fills the new job
+  qrDiff?: string[] // a scanned job card that differs from this planned job
   onEdit: () => void
   onClose: () => void
   onSaved: (orderNo: string, isNew: boolean) => void
@@ -485,26 +493,53 @@ type SaveReply =
   | { ok: false; code: 'INVALID'; errors: { field: string; message: string }[] }
   | { ok: false; code: 'STALE'; message: string }
 
-function JobForm({ job, readOnly, canEdit, papers, coatings, machines, initialOrderNo, onEdit, onClose, onSaved }: FormProps) {
-  const [date, setDate] = useState(job?.plan_date ?? plantDate())
-  const [machineId, setMachineId] = useState(job?.machine_id ?? '')
+function JobForm({ job, readOnly, canEdit, papers, coatings, machines, initialOrderNo, qr, qrDiff = [], onEdit, onClose, onSaved }: FormProps) {
+  // A new job started from a scanned job card QR begins with its values.
+  const [init] = useState(() => (!job && qr ? qrValues(qr, machines, papers, coatings) : null))
+  const [qrNotes, setQrNotes] = useState<string[]>(init?.notes ?? [])
+  const [date, setDate] = useState(job?.plan_date ?? init?.plan_date ?? plantDate())
+  const [machineId, setMachineId] = useState(job?.machine_id ?? init?.machine_id ?? '')
   const [orderNo, setOrderNo] = useState(job?.order_no ?? initialOrderNo ?? '')
-  const [csoNo, setCsoNo] = useState(job?.cso_no ?? '')
-  const [coatingId, setCoatingId] = useState(job?.coating_id ?? '')
-  const [jobName, setJobName] = useState(job?.job_name ?? '')
-  const [category, setCategory] = useState(job?.category ?? '')
-  const [ups, setUps] = useState(job ? String(job.ups) : '')
-  const [jobType, setJobType] = useState<string>(job?.job_type ?? '')
-  const [paperId, setPaperId] = useState(job?.paper_type_id ?? '')
-  const [quantity, setQuantity] = useState(job ? String(job.quantity) : '')
+  const [csoNo, setCsoNo] = useState(job?.cso_no ?? init?.cso_no ?? '')
+  const [coatingId, setCoatingId] = useState(job?.coating_id ?? init?.coating_id ?? '')
+  const [jobName, setJobName] = useState(job?.job_name ?? init?.job_name ?? '')
+  const [category, setCategory] = useState(job?.category ?? init?.category ?? '')
+  const [ups, setUps] = useState(job ? String(job.ups) : (init?.ups ?? ''))
+  const [jobType, setJobType] = useState<string>(job?.job_type ?? init?.job_type ?? '')
+  const [paperId, setPaperId] = useState(job?.paper_type_id ?? init?.paper_type_id ?? '')
+  const [quantity, setQuantity] = useState(job ? String(job.quantity) : (init?.quantity ?? ''))
   const [slots, setSlots] = useState<Slot[]>(() =>
     job && job.production_job_sides?.length
       ? sortedSides(job)
           // B/B F and B/B B share one slot: show it once.
           .filter((x, i, all) => !isBB(x.print_side) || all.findIndex((y) => isBB(y.print_side)) === i)
           .map((x) => newSlot(x.print_side, x.colours))
-      : [newSlot()],
+      : init?.slots.length
+        ? init.slots.map((x) => newSlot(x.print_side, x.colours))
+        : [newSlot()],
   )
+
+  // Scanning inside the form: a plain barcode fills the number; a job card QR also
+  // fills every field that is still empty (what was typed is kept).
+  function applyScan(text: string) {
+    const q = parseQrJob(text)
+    setOrderNo(tidy(scannedOrderNo(text, q)))
+    if (!q) return
+    const v = qrValues(q, machines, papers, coatings)
+    if (v.plan_date && !job) setDate(v.plan_date)
+    if (v.machine_id && !machineId) setMachineId(v.machine_id)
+    if (v.cso_no && !csoNo.trim()) setCsoNo(v.cso_no)
+    if (v.coating_id && !coatingId) setCoatingId(v.coating_id)
+    if (v.job_name && !jobName.trim()) setJobName(v.job_name)
+    if (v.category && !category.trim()) setCategory(v.category)
+    if (v.ups && !ups.trim()) setUps(v.ups)
+    if (v.job_type && !jobType) setJobType(v.job_type)
+    if (v.paper_type_id && !paperId) setPaperId(v.paper_type_id)
+    if (v.quantity && !quantity.trim()) setQuantity(v.quantity)
+    const blankSlots = slots.every((x) => !x.print_side && x.colours.every((c) => !c.trim()))
+    if (v.slots.length && blankSlots) setSlots(v.slots.map((x) => newSlot(x.print_side, x.colours)))
+    setQrNotes(v.notes)
+  }
   const [errors, setErrors] = useState<string[]>([])
   const [busy, setBusy] = useState(false)
   const errorBox = useRef<HTMLDivElement>(null)
@@ -602,7 +637,30 @@ function JobForm({ job, readOnly, canEdit, papers, coatings, machines, initialOr
     >
       <form id="job-form" className="form-stack" onSubmit={submit} noValidate>
         {initialOrderNo && !job && (
-          <p className="notice info">Scanned production order {initialOrderNo} is not planned yet: fill in the new job.</p>
+          <p className="notice info">
+            Scanned production order {initialOrderNo} is not planned yet:{' '}
+            {qr ? 'the details from the QR are filled in. Check them, fill in what is empty, and save.' : 'fill in the new job.'}
+          </p>
+        )}
+        {qrNotes.length > 0 && !readOnly && (
+          <div className="notice warn">
+            <b>From the QR, please check:</b>
+            <ul className="error-list">
+              {qrNotes.map((x) => (
+                <li key={x}>{x}</li>
+              ))}
+            </ul>
+          </div>
+        )}
+        {qrDiff.length > 0 && (
+          <div className="notice warn">
+            <b>The scanned QR does not match this planned job.</b> The plan is kept as it is; edit the job if the QR is right.
+            <ul className="error-list">
+              {qrDiff.map((x) => (
+                <li key={x}>{x}</li>
+              ))}
+            </ul>
+          </div>
         )}
         <div className="form-grid">
           <label className="field">
@@ -633,7 +691,7 @@ function JobForm({ job, readOnly, canEdit, papers, coatings, machines, initialOr
                 autoFocus={!readOnly && !job && !initialOrderNo}
                 aria-label="Production Order Number"
               />
-              {!readOnly && <ScanButton onScan={(text) => setOrderNo(tidy(text).slice(0, 60))} />}
+              {!readOnly && <ScanButton label="" onScan={applyScan} />}
             </div>
           </div>
           <label className="field">
@@ -791,4 +849,80 @@ function JobForm({ job, readOnly, canEdit, papers, coatings, machines, initialOr
       </form>
     </Modal>
   )
+}
+
+// ---- Job card QR ---------------------------------------------------------------------
+
+interface QrValues {
+  plan_date?: string
+  machine_id?: string
+  cso_no?: string
+  coating_id?: string
+  job_name?: string
+  category?: string
+  ups?: string
+  job_type?: string
+  paper_type_id?: string
+  quantity?: string
+  slots: { print_side: string; colours: string[] }[]
+  notes: string[] // values that could not be used
+}
+
+// The form values for a scanned QR. Machine, paper and coating must be active in the
+// masters; anything else stays empty with a note.
+function qrValues(q: QrJob, machines: Machine[], papers: PaperType[], coatings: Coating[]): QrValues {
+  const notes: string[] = []
+  const pick = <T extends { id: string; name: string; active: boolean; code?: string }>(rows: T[], value: string | undefined, label: string) => {
+    if (!value) return undefined
+    const hit = matchMaster(rows, value)
+    if (!hit) notes.push(`${label} "${value}" is not in the ${label} master: choose it.`)
+    else if (!hit.active) notes.push(`${label} "${value}" is inactive: choose another.`)
+    return hit?.active ? hit.id : undefined
+  }
+  const jobType = q.job_type ? JOB_TYPES.find((t) => t.toLowerCase().replace(/[^a-z]/g, '') === q.job_type!.toLowerCase().replace(/[^a-z]/g, '')) : undefined
+  if (q.job_type && !jobType) notes.push(`Job Type "${q.job_type}" is not NPD, NEW or Re-Print: choose it.`)
+  if (q.print_side && q.sides.length === 0) notes.push(`Print Side "${q.print_side}" is not O/S, F/S, B/S, F/S + B/S or B/B: add the print sides.`)
+  return {
+    plan_date: q.plan_date,
+    machine_id: pick(machines, q.machine, 'Machine'),
+    cso_no: q.cso_no,
+    coating_id: pick(coatings, q.coating, 'Coating'),
+    job_name: q.job_name,
+    category: q.category,
+    ups: q.ups,
+    job_type: jobType,
+    paper_type_id: pick(papers, q.paper, 'Type of Paper'),
+    quantity: q.quantity,
+    // B/B F and B/B B are one slot in the form.
+    slots: q.sides.filter((x) => x.print_side !== 'B/B B').map((x) => ({ print_side: x.print_side, colours: x.colours })),
+    notes,
+  }
+}
+
+// What a scanned QR says differently from a planned job (only values the QR has).
+function qrDifferences(q: QrJob, job: Job, machines: Machine[], papers: PaperType[], coatings: Coating[]): string[] {
+  const out: string[] = []
+  const same = (a: string | null | undefined, b: string | null | undefined) =>
+    (a ?? '').toLowerCase().replace(/\s+/g, ' ').trim() === (b ?? '').toLowerCase().replace(/\s+/g, ' ').trim()
+  const diff = (label: string, qrValue: string | undefined, planValue: string | null | undefined) => {
+    if (qrValue && !same(qrValue, planValue)) out.push(`${label}: QR ${qrValue}, plan ${planValue || '—'}`)
+  }
+  diff('Date', q.plan_date ? formatDate(q.plan_date) : undefined, formatDate(job.plan_date))
+  diff('Machine', q.machine, machines.find((m) => m.id === job.machine_id)?.code)
+  diff('CSO Number', q.cso_no, job.cso_no)
+  diff('Job Name', q.job_name, job.job_name)
+  diff('Category', q.category, job.category)
+  diff('UPS', q.ups, String(job.ups))
+  diff('Job Type', q.job_type, job.job_type)
+  diff('Type of Paper', q.paper, papers.find((p) => p.id === job.paper_type_id)?.name)
+  diff('Coating', q.coating, coatings.find((c) => c.id === job.coating_id)?.name)
+  diff('Quantity', q.quantity, String(job.quantity))
+  const planSides = sortedSides(job)
+  for (const side of q.sides) {
+    const plan = planSides.find((x) => x.print_side === side.print_side)
+    if (side.print_side === 'B/B B' && planSides.some((x) => x.print_side === 'B/B F')) continue
+    if (!plan) out.push(`Print side ${side.print_side}: in the QR, not in the plan`)
+    else if (!same(side.colours.join(','), plan.colours.join(','))) out.push(`${side.print_side} colours: QR ${side.colours.join(', ') || '—'}, plan ${plan.colours.join(', ')}`)
+  }
+  return out
 }

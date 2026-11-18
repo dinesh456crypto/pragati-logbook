@@ -596,6 +596,7 @@ export interface OrderStatus {
   order_key?: string
   job?: OrderJob | null
   last_entry_job?: OrderJob | null
+  qr_job?: OrderJob | null // an unplanned order's details from a scanned job card QR
   sides?: SideStatus[]
   closed_sides?: string[]
   fully_closed?: boolean

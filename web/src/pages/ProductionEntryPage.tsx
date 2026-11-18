@@ -42,6 +42,7 @@ import {
 } from '../lib/production'
 import type {
   DowntimeDbRow,
+  OrderJob,
   DowntimeGroup,
   WastageGroup,
   EntryRow,
@@ -57,6 +58,8 @@ import type { Machine } from '../lib/types'
 import { plantDate } from '../lib/dates'
 import { OrderPicker } from '../components/OrderPicker'
 import { ScanButton } from '../components/ScanButton'
+import { matchMaster, parseQrJob, scannedOrderNo } from '../lib/qr'
+import type { QrJob } from '../lib/qr'
 import { ReasonPicker } from '../components/DowntimeReasons'
 import { reasonGroup, useReasons } from '../lib/downtime'
 import { TimeCard } from '../components/TimeCard'
@@ -161,6 +164,7 @@ function EntryEditor({ entryId }: { entryId: string | null }) {
   const [myMachines, setMyMachines] = useState<string[] | null>(null)
   const [draftsLoaded, setDraftsLoaded] = useState(false)
   const [workerNote, setWorkerNote] = useState('')
+  const [qrNotes, setQrNotes] = useState<string[]>([])
   const [orders, setOrders] = useState<OrderOption[]>([])
   const operators = useOptions('operators')
   const supervisors = useOptions('supervisors')
@@ -419,15 +423,48 @@ function EntryEditor({ entryId }: { entryId: string | null }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [st.machine_id, st.production_date, st.shift, loading, meta.status])
 
-  async function chooseOrder(orderNo: string) {
+  async function chooseOrder(orderNo: string, qr: QrJob | null = null) {
     update({ order_no: orderNo })
+    setQrNotes([])
     if (!orderNo) {
       setStatus(null)
       statusRef.current = null
       return
     }
-    const s = await fetchStatus(orderNo, st.machine_id)
+    let s = await fetchStatus(orderNo, st.machine_id)
     if (!s) return
+    // A scanned job card QR fills an unplanned order (a planned order keeps its plan).
+    if (qr && !s.job) {
+      const notes: string[] = []
+      const pick = (rows: Option[], value: string | undefined, label: string) => {
+        if (!value) return null
+        const hit = matchMaster(rows, value)
+        if (!hit || !hit.active) notes.push(`${label} "${value}" from the QR is ${hit ? 'inactive' : `not in the ${label} master`}: choose it.`)
+        return hit?.active ? hit.id : null
+      }
+      const last = s.last_entry_job
+      const qrJob: OrderJob = {
+        order_no: orderNo,
+        cso_no: qr.cso_no ?? last?.cso_no ?? null,
+        coating_id: pick(coatings, qr.coating, 'Coating') ?? last?.coating_id ?? null,
+        job_name: qr.job_name ?? last?.job_name ?? '',
+        category: qr.category ?? last?.category ?? null,
+        ups: qr.ups ? Number(qr.ups) : (last?.ups ?? null),
+        job_type: (qr.job_type && JOB_TYPES.find((t) => t.toLowerCase() === qr.job_type!.toLowerCase())) || last?.job_type || null,
+        paper_type_id: pick(papers, qr.paper, 'Type of Paper') ?? last?.paper_type_id ?? null,
+        quantity: qr.quantity ? Number(qr.quantity) : (last?.quantity ?? null),
+        sides: qr.sides.length ? qr.sides : (last?.sides ?? []),
+      }
+      const qrMachine = qr.machine ? machines.find((m) => m.code.toLowerCase() === qr.machine!.toLowerCase()) : undefined
+      if (qr.machine && qrMachine?.id !== st.machine_id) {
+        notes.push(`The QR is for machine ${qr.machine}; this entry is on ${machines.find((m) => m.id === st.machine_id)?.code ?? 'another machine'}.`)
+      }
+      s = { ...s, last_entry_job: qrJob, qr_job: qrJob }
+      setStatus(s)
+      statusRef.current = s
+      setQrNotes(notes)
+    }
+    const status = s
     const job = s.job ?? s.last_entry_job
     if (job) {
       clearErrors(['job_name', 'category', 'ups', 'job_type', 'paper_type_id', 'planned_quantity', 'cso_no', 'coating_id', 'print_side', 'planned_colours'])
@@ -447,11 +484,18 @@ function EntryEditor({ entryId }: { entryId: string | null }) {
           // A planned order's CSO Number and Coating come from Production Plan (locked).
           cso_no: job.cso_no ?? (s.job ? '' : cur.cso_no),
           coating_id: job.coating_id ?? (s.job ? '' : cur.coating_id),
-          // A planned order with a single print side: select it straight away.
-          print_side: s.job && planned.length === 1 ? planned[0] : s.job && !planned.includes(cur.print_side) ? '' : cur.print_side,
+          // A planned order (or a QR) with a single print side: select it straight away.
+          print_side:
+            s.job && planned.length === 1
+              ? planned[0]
+              : s.job && !planned.includes(cur.print_side)
+                ? ''
+                : !s.job && s.qr_job?.sides.length === 1
+                  ? s.qr_job.sides[0].print_side
+                  : cur.print_side,
         }
       }
-      return withAuto(sideColours(next, s, true))
+      return withAuto(sideColours(next, status, true))
     })
   }
 
@@ -760,8 +804,19 @@ function EntryEditor({ entryId }: { entryId: string | null }) {
             placeholder={st.machine_id ? undefined : 'Select the machine first'}
             onSelect={chooseOrder}
           />
-          <ScanButton disabled={readOnly || !st.machine_id} onScan={(text) => chooseOrder(text.slice(0, 60))} />
+          <ScanButton
+            disabled={readOnly || !st.machine_id}
+            onScan={(text) => {
+              const qr = parseQrJob(text)
+              chooseOrder(scannedOrderNo(text, qr), qr)
+            }}
+          />
         </div>
+        {qrNotes.map((x) => (
+          <span key={x} className="field-error">
+            {x}
+          </span>
+        ))}
         {wrongMachine && (
           <span className="field-error">
             Production order {st.order_no} is planned for machine {plannedJob?.machine_code}. Select that machine, or choose
@@ -843,8 +898,10 @@ function EntryEditor({ entryId }: { entryId: string | null }) {
           <p className="notice info">
             {status.job
               ? `Planned production order: details filled in from Production Plan (${formatNumber(status.job.quantity)} sheets planned).`
-              : status.last_entry_job
-                ? 'Not in Production Plan: details filled in from the last entry for this production order.'
+              : status.qr_job
+                ? 'Not in Production Plan: details filled in from the scanned QR. Check them and fill in what is empty.'
+                : status.last_entry_job
+                  ? 'Not in Production Plan: details filled in from the last entry for this production order.'
                 : 'New production order, not in Production Plan: enter the job details, CSO Number, coating and colours yourself.'}
             {status.sides && status.sides.length > 0 &&
               ` Produced so far: ${status.sides.map((s) => `${s.side} ${formatNumber(s.ok_sheets ?? 0)} OK${s.closed ? ' (closed)' : ''}`).join(' · ')}.`}
@@ -1473,6 +1530,7 @@ const digits = (v: string) => v.replace(/[^0-9]/g, '')
 function sideColours(st: EntryState, status: OrderStatus | null, orderChanged: boolean): EntryState {
   let colours: string[] | null = null
   if (status?.job) colours = status.job.sides.find((x) => x.print_side === st.print_side)?.colours ?? []
+  else if (status?.qr_job) colours = status.qr_job.sides.find((x) => x.print_side === st.print_side)?.colours ?? null
   else if (orderChanged) colours = status?.last_entry_job?.sides.find((x) => x.print_side === st.print_side)?.colours ?? []
   const list = colours ?? cleanColours(st.planned_colours).colours
   const keys = new Set(list.map((c) => c.toLowerCase()))
