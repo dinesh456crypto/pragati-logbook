@@ -20,6 +20,15 @@ const storageKey = `sb-${new URL(projectUrl).hostname.split('.')[0]}-auth-token`
 
 // The publishable key is safe in the browser: every table is protected by
 // Row Level Security policies in supabase/migrations.
+// Saving a production entry is sent with "keepalive", so a draft saved as the phone
+// screen turns off or the app is closed still reaches the server.
+const keepaliveFetch: typeof fetch = (input, init) => {
+  const target = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+  const small = typeof init?.body === 'string' && init.body.length < 60000
+  return fetch(input, small && target.includes('/rpc/save_production_entry') ? { ...init, keepalive: true } : init)
+}
+
 export const supabase = createClient(url, key, {
   auth: { persistSession: true, autoRefreshToken: true, storageKey },
+  global: { fetch: keepaliveFetch },
 })

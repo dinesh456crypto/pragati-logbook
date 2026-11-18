@@ -4,10 +4,29 @@ import { NAV } from '../lib/nav'
 import type { Action, Resource } from '../lib/types'
 
 export function RequireAuth() {
-  const { loading, session, profile } = useAuth()
+  const { loading, session, profile, error, retry, signOut } = useAuth()
   const location = useLocation()
 
   if (loading) return <div className="page-status">Loading…</div>
+  // Signed in, but the account could not be loaded (no connection): stay signed in.
+  if (session && !profile && error) {
+    return (
+      <div className="auth-page">
+        <section className="card auth-card">
+          <h1>Connection problem</h1>
+          <p className="notice error">{error}</p>
+          <div className="actions">
+            <button type="button" className="primary" onClick={retry}>
+              Try again
+            </button>
+            <button type="button" onClick={signOut}>
+              Sign out
+            </button>
+          </div>
+        </section>
+      </div>
+    )
+  }
   if (!session || !profile) return <Navigate to="/login" replace state={{ from: location }} />
   if (profile.must_change_password && location.pathname !== '/change-password') {
     return <Navigate to="/change-password" replace />

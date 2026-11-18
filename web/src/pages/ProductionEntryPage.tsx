@@ -151,12 +151,16 @@ function EntryEditor({ entryId }: { entryId: string | null }) {
   // Automatic draft saving.
   const [autoNote, setAutoNote] = useState<{ kind: 'ok' | 'busy' | 'error'; text: string } | null>(null)
   const inFlight = useRef<Promise<unknown> | null>(null)
+  const saveAgain = useRef(false)
+  const quickSave = useRef(false)
   // Open drafts on other machines: one entry per machine at a time.
   const [machineDrafts, setMachineDrafts] = useState<(DraftInfo & { machine_id: string })[]>([])
   const [machineBlock, setMachineBlock] = useState<(DraftInfo & { machine_id: string }) | null>(null)
 
   const [machines, setMachines] = useState<Machine[]>([])
   const [myMachines, setMyMachines] = useState<string[] | null>(null)
+  const [draftsLoaded, setDraftsLoaded] = useState(false)
+  const [workerNote, setWorkerNote] = useState('')
   const [orders, setOrders] = useState<OrderOption[]>([])
   const operators = useOptions('operators')
   const supervisors = useOptions('supervisors')
@@ -192,7 +196,10 @@ function EntryEditor({ entryId }: { entryId: string | null }) {
       .from('production_entries')
       .select('id, entry_no, machine_id, order_no, job_name, production_date, shift, updated_at')
       .eq('status', 'draft')
-      .then(({ data }) => setMachineDrafts((data ?? []) as (DraftInfo & { machine_id: string })[]))
+      .then(({ data }) => {
+        setMachineDrafts((data ?? []) as (DraftInfo & { machine_id: string })[])
+        setDraftsLoaded(true)
+      })
   }, [])
 
   useEffect(() => {
@@ -326,6 +333,7 @@ function EntryEditor({ entryId }: { entryId: string | null }) {
 
   const update = useCallback(
     (patch: Partial<EntryState>) => {
+      if ('downtime' in patch) quickSave.current = true
       setSt((s) => withAuto({ ...s, ...patch }))
       clearErrors(Object.keys(patch))
       touch()
@@ -358,6 +366,58 @@ function EntryEditor({ entryId }: { entryId: string | null }) {
     fetchStatus(st.order_no, machineId)
     fetchTimeline(machineId, meta.status === 'submitted')
   }
+
+  // A user who may use only one machine (an operator) gets it selected on a new entry.
+  const autoMachine = useRef(false)
+  useEffect(() => {
+    if (autoMachine.current || entryId || meta.status !== 'new' || readOnly || !draftsLoaded) return
+    if (!profile || profile.role === 'super_admin' || profile.all_machines || myMachines === null || machines.length === 0) return
+    autoMachine.current = true
+    const mine = machines.filter((m) => m.active && myMachines.includes(m.id))
+    if (mine.length === 1 && !stRef.current.machine_id) chooseMachine(mine[0].id)
+    // Runs once, when the machine lists have loaded.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [machines, myMachines, draftsLoaded, profile])
+
+  // Worker details are entered once per shift: a new entry on the same machine,
+  // date and shift takes them from the latest entry (they can still be changed).
+  useEffect(() => {
+    if (loading || readOnly || meta.status === 'submitted') return
+    if (!st.machine_id || !st.production_date || !st.shift) return
+    const cur = stRef.current
+    if (cur.operator_id || cur.supervisor_id || cur.qc_executive_id || cur.helpers) return
+    let alive = true
+    supabase
+      .from('production_entries')
+      .select('entry_no, operator_id, supervisor_id, qc_executive_id, helpers')
+      .eq('machine_id', st.machine_id)
+      .eq('production_date', st.production_date)
+      .eq('shift', st.shift)
+      .neq('id', meta.id)
+      .not('operator_id', 'is', null)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .then(({ data }) => {
+        const w = (data ?? [])[0] as
+          | { entry_no: number; operator_id: string | null; supervisor_id: string | null; qc_executive_id: string | null; helpers: number | null }
+          | undefined
+        if (!alive || !w) return
+        const now = stRef.current
+        if (now.operator_id || now.supervisor_id || now.qc_executive_id || now.helpers) return
+        update({
+          operator_id: w.operator_id ?? '',
+          supervisor_id: w.supervisor_id ?? '',
+          qc_executive_id: w.qc_executive_id ?? '',
+          helpers: w.helpers == null ? '' : String(w.helpers),
+        })
+        setWorkerNote(`Filled in from ${entryLabel(w.entry_no)} (same machine and shift). Change them if anyone changed.`)
+      })
+    return () => {
+      alive = false
+    }
+    // Only when the machine, date or shift changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [st.machine_id, st.production_date, st.shift, loading, meta.status])
 
   async function chooseOrder(orderNo: string) {
     update({ order_no: orderNo })
@@ -533,12 +593,19 @@ function EntryEditor({ entryId }: { entryId: string | null }) {
     const m = metaRef.current
     const state = stRef.current
     if (!dirtyRef.current || m.status === 'submitted' || readOnly || !state.machine_id || otherDraftOn(state.machine_id)) return
-    if (inFlight.current) return
+    if (inFlight.current) {
+      saveAgain.current = true // save once more when the current save has finished
+      return
+    }
     setAutoNote({ kind: 'busy', text: 'Saving draft…' })
     const job = callSave(state, false, false, true)
     inFlight.current = job
     const result = await job
     inFlight.current = null
+    if (saveAgain.current) {
+      saveAgain.current = false
+      if (stRef.current !== state) setTimeout(() => autosaveRef.current(), 0)
+    }
     if (!result) return
     if (result.ok) {
       if (stRef.current === state) markClean()
@@ -559,17 +626,25 @@ function EntryEditor({ entryId }: { entryId: string | null }) {
     autosaveRef.current = autosave
   })
 
-  // After a pause in typing, and when the browser tab is hidden or the page is left.
+  // Draft saving: 4 seconds after the last change (1 second after a downtime change,
+  // so a downtime is kept even if the phone is put away), and when the browser tab
+  // is hidden or the page is left.
   useEffect(() => {
     if (!dirty) return
-    const t = setTimeout(() => autosaveRef.current(), 15000)
+    const t = setTimeout(() => {
+      quickSave.current = false
+      autosaveRef.current()
+    }, quickSave.current ? 1000 : 4000)
     return () => clearTimeout(t)
   }, [st, dirty])
   useEffect(() => {
     const onHide = () => document.visibilityState === 'hidden' && autosaveRef.current()
     document.addEventListener('visibilitychange', onHide)
+    const onPageHide = () => autosaveRef.current()
+    window.addEventListener('pagehide', onPageHide)
     return () => {
       document.removeEventListener('visibilitychange', onHide)
+      window.removeEventListener('pagehide', onPageHide)
       autosaveRef.current() // leaving the page inside the app
     }
   }, [])
@@ -794,6 +869,7 @@ function EntryEditor({ entryId }: { entryId: string | null }) {
 
     // 2. Worker Details
     <div key="workers" className="form-grid">
+      {workerNote && <p className="notice info span-all">{workerNote}</p>}
       <Field label="Operator Name *" error={errorOf('operator_id')}>
         <MasterSelect rows={operators} value={st.operator_id} disabled={readOnly} onChange={(v) => update({ operator_id: v })} />
       </Field>
