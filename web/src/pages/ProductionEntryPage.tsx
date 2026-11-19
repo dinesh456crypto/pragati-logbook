@@ -14,6 +14,8 @@ import {
   UNIT_COUNT,
   applyAutoStarts,
   autoChanges,
+  A_SHIFT_START,
+  shiftReady,
   DOWNTIME_COLUMNS,
   WASTAGE_COLUMNS,
   downtimeGroupLabel,
@@ -82,7 +84,7 @@ interface Meta {
 
 interface DraftInfo {
   id: string
-  entry_no: number
+  entry_no: number | null
   order_no: string | null
   job_name: string | null
   production_date: string
@@ -91,7 +93,7 @@ interface DraftInfo {
 }
 
 type SaveResult =
-  | { ok: true; id: string; entry_no: number; status: 'draft' | 'submitted'; updated_at: string }
+  | { ok: true; id: string; entry_no: number | null; status: 'draft' | 'submitted'; updated_at: string }
   | { ok: false; code: 'INVALID'; errors: FieldError[] }
   | { ok: false; code: 'STALE'; message: string }
   | { ok: false; code: 'DRAFT_EXISTS'; message: string; draft: DraftInfo }
@@ -222,7 +224,7 @@ function EntryEditor({ entryId }: { entryId: string | null }) {
     (s: EntryState, submitted = meta.status === 'submitted') =>
       applyAutoStarts(
         s,
-        submitted ? null : readyRef.current,
+        submitted ? null : shiftReady(readyRef.current, s.shift, s.production_date).stamp,
         changeoverRequired(s.print_side, s.continuing, statusRef.current?.is_first ?? true),
       ),
     [meta.status],
@@ -526,7 +528,10 @@ function EntryEditor({ entryId }: { entryId: string | null }) {
     touch()
   }
 
-  const readyStamp = timeline?.ready_at && meta.status !== 'submitted' ? isoToStamp(timeline.ready_at) : null
+  const readyInfo =
+    timeline?.ready_at && meta.status !== 'submitted' ? shiftReady(isoToStamp(timeline.ready_at), st.shift, st.production_date) : null
+  const readyStamp = readyInfo?.stamp ?? null
+  const firstSource = readyInfo?.idleFrom ? 'A shift start (8:00 AM)' : 'machine ready time'
   const autoFor = (key: StepKey, source: string) => ({
     manual: st.manual_starts.includes(key),
     source,
@@ -623,7 +628,7 @@ function EntryEditor({ entryId }: { entryId: string | null }) {
 
   // After a draft is saved: remember its number/version, and give the page the
   // draft's own address (without reloading the form).
-  function draftSaved(result: { id: string; entry_no: number; updated_at: string }) {
+  function draftSaved(result: { id: string; entry_no: number | null; updated_at: string }) {
     const next = { ...metaRef.current, entryNo: result.entry_no, status: 'draft' as const, updatedAt: result.updated_at }
     metaRef.current = next
     setMeta(next)
@@ -654,7 +659,7 @@ function EntryEditor({ entryId }: { entryId: string | null }) {
     if (result.ok) {
       if (stRef.current === state) markClean()
       draftSaved(result)
-      setAutoNote({ kind: 'ok', text: `Draft ${entryLabel(result.entry_no)} saved automatically at ${time12(nowStamp().time)}` })
+      setAutoNote({ kind: 'ok', text: `Draft saved automatically at ${time12(nowStamp().time)}` })
     } else if (result.code === 'DRAFT_EXISTS') {
       setAutoNote(null)
       setConflict(result.draft)
@@ -715,7 +720,7 @@ function EntryEditor({ entryId }: { entryId: string | null }) {
         notify('success', `Entry ${entryLabel(result.entry_no)} saved.`)
         navigate('/production/entry')
       } else {
-        notify('success', `Draft ${entryLabel(result.entry_no)} saved.`)
+        notify('success', 'Draft saved. It gets its PE number when you press Save Entry.')
         draftSaved(result)
         setAutoNote(null)
       }
@@ -748,7 +753,7 @@ function EntryEditor({ entryId }: { entryId: string | null }) {
   }
 
   const title =
-    meta.status === 'new' ? 'New Production Entry' : `Production Entry ${entryLabel(meta.entryNo)}`
+    meta.status === 'new' ? 'New Production Entry' : meta.entryNo ? `Production Entry ${entryLabel(meta.entryNo)}` : 'Production Entry (draft)'
 
   const sideNotice = (() => {
     if (!st.order_no || !st.print_side || !status) return null
@@ -1058,7 +1063,13 @@ function EntryEditor({ entryId }: { entryId: string | null }) {
             ? 'Changeover is optional: this is not the first B/B entry of this order. Any activity you start needs both Start and End.'
             : 'Changeover is optional for a continuing job. Any activity you start needs both Start and End.'}
       </p>
-      <TimelinePanel timeline={timeline} machineCode={machine?.code} submitted={meta.status === 'submitted'} />
+      <TimelinePanel
+        timeline={timeline}
+        machineCode={machine?.code}
+        submitted={meta.status === 'submitted'}
+        shift={st.shift}
+        date={st.production_date}
+      />
       <div className="time-cards">
         {ACTIVITIES.map((a, i) => {
           const t = stepTimes(st, a.key)
@@ -1071,7 +1082,7 @@ function EntryEditor({ entryId }: { entryId: string | null }) {
               disabled={readOnly}
               error={errorOf(a.key)}
               downtime={t.downtime}
-              auto={autoFor(a.key, i === 0 ? 'machine ready time' : `${ACTIVITIES[i - 1].label} end`)}
+              auto={autoFor(a.key, i === 0 ? firstSource : `${ACTIVITIES[i - 1].label} end`)}
               onChange={(s) => setSpan(a.key, s)}
             />
           )
@@ -1466,7 +1477,7 @@ function EntryEditor({ entryId }: { entryId: string | null }) {
           }
         >
           <p>
-            <b>{machines.find((m) => m.id === machineBlock.machine_id)?.code}</b> has draft <b>{entryLabel(machineBlock.entry_no)}</b>
+            <b>{machines.find((m) => m.id === machineBlock.machine_id)?.code}</b> has an open draft
             {machineBlock.order_no ? ` · production order ${machineBlock.order_no}` : ''}
             {machineBlock.job_name ? ` · ${machineBlock.job_name}` : ''}
           </p>
@@ -1573,7 +1584,19 @@ function MasterSelect({ rows, value, disabled, onChange }: { rows: Option[]; val
   )
 }
 
-function TimelinePanel({ timeline, machineCode, submitted }: { timeline: Timeline | null; machineCode?: string; submitted: boolean }) {
+function TimelinePanel({
+  timeline,
+  machineCode,
+  submitted,
+  shift,
+  date,
+}: {
+  timeline: Timeline | null
+  machineCode?: string
+  submitted: boolean
+  shift: string
+  date: string
+}) {
   if (!machineCode) return <p className="notice info">Select the machine in Job Details to load its timeline.</p>
   if (!timeline) return <p className="notice info">Loading the machine timeline…</p>
   const prev = timeline.previous
@@ -1596,12 +1619,20 @@ function TimelinePanel({ timeline, machineCode, submitted }: { timeline: Timelin
           {d.reason ? `, ${d.reason}` : ''})
         </p>
       ))}
-      {timeline.ready_at && (
-        <p>
-          Machine ready from <b>{formatMoment(timeline.ready_at)}</b>
-          {submitted ? '' : ' → used as the Job Changeover start'}
-        </p>
-      )}
+      {timeline.ready_at && (() => {
+        const adj = submitted ? null : shiftReady(isoToStamp(timeline.ready_at), shift, date)
+        return adj?.idleFrom ? (
+          <p>
+            Machine idle overnight <b>{formatMoment(timeline.ready_at)}</b> – <b>{time12(A_SHIFT_START)}</b>, not counted (A shift starts at{' '}
+            {time12(A_SHIFT_START)}) → Job Changeover starts at <b>{time12(A_SHIFT_START)}</b>
+          </p>
+        ) : (
+          <p>
+            Machine ready from <b>{formatMoment(timeline.ready_at)}</b>
+            {submitted ? '' : ' → used as the Job Changeover start'}
+          </p>
+        )
+      })()}
       {timeline.open_downtime.map((d) => (
         <p key={d.id} className="warn-text">
           Open downtime{d.kind ? ` (${downtimeGroupLabel(d.kind)})` : ''} since {formatMoment(d.start_at)}: the machine is still recorded as down.

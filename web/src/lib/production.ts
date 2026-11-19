@@ -369,7 +369,18 @@ export function formatDuration(minutes: number | null | undefined): string {
   return h ? `${h} h ${m} min` : `${m} min`
 }
 
-export const entryLabel = (n: number | null | undefined) => (n ? `PE-${String(n).padStart(5, '0')}` : 'New entry')
+// PE numbers are given when an entry is saved; a draft has none yet.
+export const entryLabel = (n: number | null | undefined) => (n ? `PE-${String(n).padStart(5, '0')}` : 'Draft')
+
+// A shift starts at 8:00 AM. The plant is closed between the end of B shift and then, so
+// for an A-shift entry the machine counts as ready no earlier than 8:00 AM of its
+// production date. idleFrom: the real ready time when it was moved.
+export const A_SHIFT_START = '08:00'
+export function shiftReady(ready: Stamp | null, shift: string, date: string): { stamp: Stamp | null; idleFrom: Stamp | null } {
+  if (!ready || !stampFilled(ready) || shift !== 'A' || !date) return { stamp: ready, idleFrom: null }
+  const start: Stamp = { date, time: A_SHIFT_START }
+  return compareStamps(ready, start) < 0 ? { stamp: start, idleFrom: ready } : { stamp: ready, idleFrom: null }
+}
 
 // ---- Rules shown live ---------------------------------------------------------
 
@@ -441,7 +452,7 @@ export function toPayload(st: EntryState) {
 
 export interface EntryRow {
   id: string
-  entry_no: number
+  entry_no: number | null
   status: 'draft' | 'submitted'
   machine_id: string
   production_date: string

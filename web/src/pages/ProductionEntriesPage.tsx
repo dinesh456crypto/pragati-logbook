@@ -13,7 +13,7 @@ const PAGE_SIZE = 15
 
 interface ListRow {
   id: string
-  entry_no: number
+  entry_no: number | null
   status: 'draft' | 'submitted'
   production_date: string
   order_no: string | null
@@ -89,6 +89,7 @@ export function ProductionEntriesPage() {
       .select(COLUMNS, { count: 'exact' })
       .order('production_date', { ascending: false })
       .order('entry_no', { ascending: false })
+      .order('created_at', { ascending: false }) // drafts have no PE number yet
       .range((page - 1) * PAGE_SIZE, page * PAGE_SIZE - 1)
     if (filters.machine) q = q.eq('machine_id', filters.machine)
     if (filters.shift) q = q.eq('shift', filters.shift)
@@ -164,7 +165,7 @@ export function ProductionEntriesPage() {
     notify(
       'success',
       kind === 'delete'
-        ? `${row.status === 'draft' ? 'Draft' : 'Entry'} ${entryLabel(row.entry_no)} deleted.`
+        ? row.status === 'draft' ? 'Draft deleted.' : `Entry ${entryLabel(row.entry_no)} deleted.`
         : kind === 'close'
           ? `${row.print_side} of order ${row.order_no} closed.`
           : `${row.print_side} of order ${row.order_no} reopened.`,
@@ -420,7 +421,7 @@ export function ProductionEntriesPage() {
         <ConfirmDialog
           title={
             pending.kind === 'delete'
-              ? `Delete ${pending.row.status === 'draft' ? 'draft' : 'entry'} ${entryLabel(pending.row.entry_no)}?`
+              ? pending.row.status === 'draft' ? 'Delete this draft?' : `Delete entry ${entryLabel(pending.row.entry_no)}?`
               : pending.kind === 'close'
                 ? `Close ${pending.row.print_side} of order ${pending.row.order_no}?`
                 : `Reopen ${pending.row.print_side} of order ${pending.row.order_no}?`
