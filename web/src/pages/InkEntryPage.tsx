@@ -16,31 +16,32 @@ import { loadInkPhotos, removeInkPhoto, uploadInkPhoto } from '../lib/inkPhotos'
 import type { InkPhoto } from '../lib/inkPhotos'
 import { useToast } from '../components/Toast'
 
-interface PlanJob {
-  id: string
+// A production order as saved in Production Entry (details of its latest saved entry).
+interface OrderInfo {
   order_no: string
   cso_no?: string | null
   job_name: string
   category: string | null
-  plan_date: string
+  production_date: string // last production date
   paper_type: string | null
 }
 
-// What ink_order_options returns: orders with a formula record, or still needing one.
+// What ink_order_options returns: orders with saved production entries that have a
+// formula record, or still need one.
 interface InkOrder {
-  job_id: string
   order_no: string
   cso_no: string | null
   job_name: string
   category: string | null
-  plan_date: string
+  last_production_date: string
   paper_type: string | null
   record_id: string | null
   record_no: number | null
 }
 
-// A plan colour as order_plan_colours returns it. "known": the formula already saved for
-// this colour with the same paper type and category on an earlier order.
+// A colour of the order, from the Planned Colours of its saved production entries
+// (order_entry_colours). "known": the formula already saved for this colour with the
+// same paper type and category on an earlier order.
 interface PlanColour {
   colour: string
   sides: string[]
@@ -55,7 +56,7 @@ interface Row {
   colour: string
   sides: string[]
   formula: string
-  status: 'plan' | 'new' | 'gone' // in the plan / added to the plan since / no longer in the plan
+  status: 'plan' | 'new' | 'gone' // in the entries / added to the entries since / no longer in the entries
 }
 
 type SaveReply =
@@ -76,10 +77,10 @@ function InkEditor({ recordId, startOrder }: { recordId: string | null; startOrd
   const { can } = useAuth()
   const notify = useToast()
   const navigate = useNavigate()
-  const [jobs, setJobs] = useState<PlanJob[]>([])
+  const [jobs, setJobs] = useState<OrderInfo[]>([])
   const [live, setLive] = useState<Map<string, { id: string; record_no: number }>>(new Map())
   const [orderNo, setOrderNo] = useState('')
-  const [job, setJob] = useState<PlanJob | null>(null)
+  const [job, setJob] = useState<OrderInfo | null>(null)
   const [record, setRecord] = useState<InkRecord | null>(null)
   const [rows, setRows] = useState<Row[]>([])
   // C, M, Y, K of the order: shown for information, no formula needed.
@@ -106,12 +107,11 @@ function InkEditor({ recordId, startOrder }: { recordId: string | null; startOrd
       const list = (data ?? []) as InkOrder[]
       setJobs(
         list.map((x) => ({
-          id: x.job_id,
           order_no: x.order_no,
           cso_no: x.cso_no,
           job_name: x.job_name,
           category: x.category,
-          plan_date: x.plan_date,
+          production_date: x.last_production_date,
           paper_type: x.paper_type,
         })),
       )
@@ -133,8 +133,9 @@ function InkEditor({ recordId, startOrder }: { recordId: string | null; startOrd
           order_no: j.order_no,
           cso_no: j.cso_no,
           job_name: j.job_name,
-          plan_date: j.plan_date,
-          planned: true,
+          plan_date: null,
+          planned: false,
+          status_text: j.production_date ? `Last produced ${formatDate(j.production_date)}` : 'Produced',
           sides_used: [],
           sides_closed: [],
           note: rec ? `has formula ${formulaLabel(rec.record_no)}` : undefined,
@@ -143,7 +144,7 @@ function InkEditor({ recordId, startOrder }: { recordId: string | null; startOrd
     [jobs, live],
   )
 
-  // Loads a saved record, merged with the plan's colours as they are now.
+  // Loads a saved record, merged with the order's colours in Production Entry as they are now.
   const openRecord = useCallback(
     async (id: string) => {
       setLoading(true)
@@ -158,28 +159,22 @@ function InkEditor({ recordId, startOrder }: { recordId: string | null; startOrd
       }
       const rec = r.data as InkRecord
       const saved = (c.data ?? []) as InkColour[]
-      let plan: PlanColour[] = []
-      let std: string[] = []
-      let knownList: KnownRow[] = []
-      if (rec.job_id) {
-        // Only formulas saved before this record was made count as "already known".
-        const p = await supabase.rpc('order_plan_colours', { p_job_id: rec.job_id, p_before: rec.created_at })
-        const all = (p.data ?? []) as PlanColour[]
-        knownList = knownRows(all)
-        plan = all.filter((x) => !isStandardColour(x.colour) && !x.known)
-        std = all.filter((x) => isStandardColour(x.colour)).map((x) => x.colour)
-      }
+      // Only formulas saved before this record was made count as "already known".
+      const p = await supabase.rpc('order_entry_colours', { p_order_no: rec.order_no, p_before: rec.created_at })
+      const all = (p.data ?? []) as PlanColour[]
+      const knownList = knownRows(all)
+      const plan = all.filter((x) => !isStandardColour(x.colour) && !x.known)
+      const std = all.filter((x) => isStandardColour(x.colour)).map((x) => x.colour)
       const knownKeys = new Set(knownList.map((x) => colourKey(x.colour)))
-      const planKeys = new Set(plan.map((x) => colourKey(x.colour)))
+      const allKeys = new Set(all.map((x) => colourKey(x.colour)))
       const savedKeys = new Set(saved.map((x) => colourKey(x.colour)))
       setRecord(rec)
       setOrderNo(rec.order_no)
       setJob({
-        id: rec.job_id ?? '',
         order_no: rec.order_no,
         job_name: rec.job_name ?? '',
         category: rec.category,
-        plan_date: rec.plan_date ?? '',
+        production_date: rec.production_date ?? '',
         paper_type: rec.paper_type,
       })
       setStandard(std)
@@ -191,7 +186,7 @@ function InkEditor({ recordId, startOrder }: { recordId: string | null; startOrd
             colour: x.colour,
             sides: x.sides,
             formula: x.formula ?? '',
-            status: (rec.job_id && !planKeys.has(colourKey(x.colour)) ? 'gone' : 'plan') as Row['status'],
+            status: (all.length && !allKeys.has(colourKey(x.colour)) ? 'gone' : 'plan') as Row['status'],
           })),
         ...plan
           .filter((x) => !savedKeys.has(colourKey(x.colour)))
@@ -231,7 +226,7 @@ function InkEditor({ recordId, startOrder }: { recordId: string | null; startOrd
       return
     }
     setLoading(true)
-    const { data, error } = await supabase.rpc('order_plan_colours', { p_job_id: j.id })
+    const { data, error } = await supabase.rpc('order_entry_colours', { p_order_no: j.order_no })
     setLoading(false)
     if (error) return notify('error', friendlyError(error))
     const all = (data ?? []) as PlanColour[]
@@ -255,7 +250,7 @@ function InkEditor({ recordId, startOrder }: { recordId: string | null; startOrd
   }, [recordId, openRecord])
   useEffect(() => {
     if (!recordId && startOrder && jobs.length) chooseOrder(startOrder)
-    // Runs once the plan list has loaded.
+    // Runs once the order list has loaded.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [jobs.length])
 
@@ -328,7 +323,7 @@ function InkEditor({ recordId, startOrder }: { recordId: string | null; startOrd
           <p className="muted">
             {record
               ? `Revision ${record.revision} · last changed ${formatMoment(record.updated_at)}${record.updated_by_name ? ` by ${record.updated_by_name}` : ''}`
-              : 'Select a production order from Production Plan, then enter the ink formula for each new colour.'}
+              : 'Select a production order that has a saved production entry, then enter the ink formula for each new colour.'}
           </p>
         </div>
         {record && (
@@ -353,7 +348,9 @@ function InkEditor({ recordId, startOrder }: { recordId: string | null; startOrd
           </label>
           <div className="field">
             <span>CSO Number</span>
-            <p className="field-value">{(job && jobs.find((x) => x.id === job.id)?.cso_no) || '—'}</p>
+            <p className="field-value">
+              {(job && jobs.find((x) => x.order_no.trim().toLowerCase() === job.order_no.trim().toLowerCase())?.cso_no) || '—'}
+            </p>
           </div>
           <div className="field">
             <span>Job Name</span>
@@ -364,8 +361,8 @@ function InkEditor({ recordId, startOrder }: { recordId: string | null; startOrd
             <p className="field-value">{job?.category || '—'}</p>
           </div>
           <div className="field">
-            <span>Planned Date</span>
-            <p className="field-value">{job?.plan_date ? formatDate(job.plan_date) : '—'}</p>
+            <span>Last Production Date</span>
+            <p className="field-value">{job?.production_date ? formatDate(job.production_date) : '—'}</p>
           </div>
           <div className="field">
             <span>Type of Paper</span>
@@ -414,7 +411,7 @@ function InkEditor({ recordId, startOrder }: { recordId: string | null; startOrd
                 ? 'Every colour of this production order already has a formula (or is C, M, Y, K), so no new formula is needed.'
                 : standard.length
                   ? 'This production order uses only the standard colours C, M, Y, K, so it needs no ink formula.'
-                  : 'This production order has no colours in Production Plan. Add its colours under Job Details first.'}
+                  : 'The saved production entries of this order have no Planned Colours, so there is nothing to enter a formula for.'}
             </p>
           ) : (
             <div className="ink-rows">
@@ -423,8 +420,8 @@ function InkEditor({ recordId, startOrder }: { recordId: string | null; startOrd
                   <div className="ink-colour">
                     <span className="chip">{r.colour}</span>
                     <span className="muted small">{sideText(r.sides)}</span>
-                    {r.status === 'new' && <span className="badge amber">New in plan</span>}
-                    {r.status === 'gone' && <span className="badge grey">Not in plan any more</span>}
+                    {r.status === 'new' && <span className="badge amber">New colour</span>}
+                    {r.status === 'gone' && <span className="badge grey">Not in production entries any more</span>}
                   </div>
                   <label className="field">
                     <span className="sr-only">Formula for {r.colour}</span>

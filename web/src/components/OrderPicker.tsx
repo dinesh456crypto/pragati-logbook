@@ -142,7 +142,7 @@ export function OrderPicker({ value, options, disabled, invalid, allowNew = true
                     {it.option.cso_no ? ` · CSO ${it.option.cso_no}` : ''} · {it.option.job_name}
                   </span>
                   <span className="picker-meta">
-                    {it.option.planned ? `Planned ${formatDate(it.option.plan_date)}` : 'Not in plan'}
+                    {it.option.status_text ?? (it.option.planned ? `Planned ${formatDate(it.option.plan_date)}` : 'Not in plan')}
                     {it.option.sides_used.length > 0 && ` · Printed: ${it.option.sides_used.join(', ')}`}
                     {it.option.sides_closed.length > 0 && ` · Closed: ${it.option.sides_closed.join(', ')}`}
                     {it.option.note && ` · ${it.option.note}`}

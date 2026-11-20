@@ -1,4 +1,4 @@
-// Ink Formula Management: one formula record per planned order, with revisions.
+// Ink Formula Management: one formula record per production order (from saved production entries), with revisions.
 
 export interface InkColour {
   colour: string
@@ -14,7 +14,8 @@ export interface InkRecord {
   order_key: string
   job_name: string | null
   category: string | null
-  plan_date: string | null
+  plan_date: string | null // when the order is also in Production Plan
+  production_date: string | null // last production date of the order
   paper_type: string | null
   revision: number
   archived: boolean
@@ -34,7 +35,7 @@ export interface InkRevision {
 }
 
 export const RECORD_COLUMNS =
-  'id, record_no, job_id, order_no, order_key, job_name, category, plan_date, paper_type, revision, archived, created_by_name, updated_by_name, created_at, updated_at'
+  'id, record_no, job_id, order_no, order_key, job_name, category, plan_date, production_date, paper_type, revision, archived, created_by_name, updated_by_name, created_at, updated_at'
 
 export const formulaLabel = (n: number | null | undefined) => (n ? `IF-${String(n).padStart(5, '0')}` : 'New formula')
 

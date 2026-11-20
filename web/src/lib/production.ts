@@ -96,8 +96,14 @@ export interface DowntimeRow {
 }
 export const emptyDowntime = (): DowntimeRow => ({ reason_id: '', span: emptySpan(), remarks: '' })
 
-// Colour codes compare without case or spaces: 'PMS 185' = 'pms185'.
-export const colourKey = (c: string | null | undefined) => (c ?? '').replace(/\s/g, '').toLowerCase()
+// Colour codes compare without case, spaces or punctuation, and a P / PMS / Pantone
+// before a number is ignored: '185' = 'P185' = 'p.185' = 'PMS 185'. Same as the
+// database's colour_key().
+export const colourKey = (c: string | null | undefined) =>
+  (c ?? '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, '')
+    .replace(/^(pantone|pms|p)([0-9])/, '$2')
 
 // No. of Colour Changes and Coating Changed?, worked out the same way the database does:
 // unit by unit against the previous completed job on this machine (empty ↔ colour counts).
@@ -651,4 +657,5 @@ export interface OrderOption {
   sides_used: string[]
   sides_closed: string[]
   note?: string // extra text shown in the order list
+  status_text?: string // replaces "Planned …" / "Not in plan" in the order list
 }

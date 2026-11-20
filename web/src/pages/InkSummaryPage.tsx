@@ -51,8 +51,8 @@ export function InkSummaryPage() {
       .eq('archived', archived)
       .order('updated_at', { ascending: false })
       .limit(3000)
-    if (from) q = q.gte('plan_date', from)
-    if (to) q = q.lte('plan_date', to)
+    if (from) q = q.gte('production_date', from)
+    if (to) q = q.lte('production_date', to)
     if (query) q = q.or(`order_no.ilike.${searchPattern(query)},job_name.ilike.${searchPattern(query)}`)
     q.then(({ data, error }) => {
       if (!alive) return
@@ -188,7 +188,7 @@ export function InkSummaryPage() {
                     </td>
                     <td>{r.order_no}</td>
                     <td className="wrap">{r.job_name}</td>
-                    <td>{formatDate(r.plan_date)}</td>
+                    <td>{formatDate(r.production_date)}</td>
                     <td className="wrap">
                       {[...r.ink_formula_colours]
                         .sort((a, b) => a.line - b.line)
@@ -243,7 +243,7 @@ export function InkSummaryPage() {
             </button>
           </div>
         </div>
-        <p className="muted small">Date is the order's Production Plan date. Archived records stay readable and can be restored.</p>
+        <p className="muted small">Date is the order's last production date. Archived records stay readable and can be restored.</p>
       </section>
 
       {pending && (
