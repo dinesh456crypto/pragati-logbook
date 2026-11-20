@@ -2260,3 +2260,81 @@ fieldset.colour-set.invalid {
   font-size: 12px;
   line-height: 20px;
 }
+
+/* Ink formula job sample photos */
+.ink-photos {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 4px 0 14px;
+}
+
+.ink-photos h3 {
+  margin: 0;
+}
+
+.ink-photos p {
+  margin: 0;
+}
+
+.photo-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 12px;
+  width: 100%;
+}
+
+.photo-tile {
+  position: relative;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.photo-tile img,
+.photo-missing {
+  display: block;
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  object-fit: cover;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg);
+}
+
+.photo-missing {
+  display: grid;
+  place-items: center;
+}
+
+.photo-tile.pending img {
+  border-style: dashed;
+  border-color: var(--teal);
+}
+
+.photo-remove {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 30px;
+  height: 30px;
+  min-height: 0;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid var(--line);
+  color: var(--danger);
+}
+
+@media print {
+  .photo-remove {
+    display: none;
+  }
+  .photo-grid {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}

@@ -225,7 +225,7 @@ function EntryEditor({ entryId }: { entryId: string | null }) {
       applyAutoStarts(
         s,
         submitted ? null : shiftReady(readyRef.current, s.shift, s.production_date).stamp,
-        changeoverRequired(s.print_side, s.continuing, statusRef.current?.is_first ?? true),
+        changeoverRequired(s.continuing),
       ),
     [meta.status],
   )
@@ -564,8 +564,7 @@ function EntryEditor({ entryId }: { entryId: string | null }) {
 
   const planned = cleanColours(st.planned_colours).colours
   const plannedRepeats = cleanColours(st.planned_colours).repeated
-  const isFirst = status?.is_first ?? true
-  const required = changeoverRequired(st.print_side, st.continuing, isFirst)
+  const required = changeoverRequired(st.continuing)
   const totals = changeoverTotals(st)
   const runTimes = stepTimes(st, 'run')
   const plannedJob = status?.job ?? null
@@ -1059,9 +1058,7 @@ function EntryEditor({ entryId }: { entryId: string | null }) {
       <p className={`notice ${required ? 'warn' : 'info'}`}>
         {required
           ? 'Changeover is required for this entry: fill in Job Changeover, Registration and Colour Matching.'
-          : st.print_side.startsWith('B/B')
-            ? 'Changeover is optional: this is not the first B/B entry of this order. Any activity you start needs both Start and End.'
-            : 'Changeover is optional for a continuing job. Any activity you start needs both Start and End.'}
+          : 'Changeover is optional for a continuing job. Any activity you start needs both Start and End.'}
       </p>
       <TimelinePanel
         timeline={timeline}

@@ -10,6 +10,10 @@ import type { OrderOption } from '../lib/production'
 import { RECORD_COLUMNS, formulaLabel, isStandardColour, sideText } from '../lib/ink'
 import type { InkColour, InkRecord } from '../lib/ink'
 import { OrderPicker } from '../components/OrderPicker'
+import { PhotoGallery, PhotoPicker } from '../components/InkPhotos'
+import { ConfirmDialog } from '../components/Modal'
+import { loadInkPhotos, removeInkPhoto, uploadInkPhoto } from '../lib/inkPhotos'
+import type { InkPhoto } from '../lib/inkPhotos'
 import { useToast } from '../components/Toast'
 
 interface PlanJob {
@@ -87,6 +91,11 @@ function InkEditor({ recordId, startOrder }: { recordId: string | null; startOrd
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
   const [dirty, setDirty] = useState(false)
+  // Job sample photos: saved ones, and new ones uploaded when the formula is saved.
+  const [photos, setPhotos] = useState<InkPhoto[]>([])
+  const [newPhotos, setNewPhotos] = useState<File[]>([])
+  const [removing, setRemoving] = useState<InkPhoto | null>(null)
+  const [removeBusy, setRemoveBusy] = useState(false)
 
   const editable = record ? can('ink_formula', 'edit') && !record.archived : can('ink_formula', 'create')
 
@@ -191,7 +200,13 @@ function InkEditor({ recordId, startOrder }: { recordId: string | null; startOrd
       setNote('')
       setErrors([])
       setDirty(false)
+      setNewPhotos([])
       setLoading(false)
+      try {
+        setPhotos(await loadInkPhotos(rec.id))
+      } catch (err) {
+        notify('error', `Could not load the photos: ${(err as Error).message}`)
+      }
     },
     [notify],
   )
@@ -206,6 +221,8 @@ function InkEditor({ recordId, startOrder }: { recordId: string | null; startOrd
       setStandard([])
       setKnown([])
       setRecord(null)
+      setPhotos([])
+      setNewPhotos([])
       return
     }
     const rec = live.get(j.order_no.trim().toLowerCase())
@@ -220,6 +237,8 @@ function InkEditor({ recordId, startOrder }: { recordId: string | null; startOrd
     const all = (data ?? []) as PlanColour[]
     setJob(j)
     setRecord(null)
+    setPhotos([])
+    setNewPhotos([])
     setStandard(all.filter((x) => isStandardColour(x.colour)).map((x) => x.colour))
     setKnown(knownRows(all))
     setRows(
@@ -262,13 +281,35 @@ function InkEditor({ recordId, startOrder }: { recordId: string | null; startOrd
     if (error) return setErrors([friendlyError(error, 'formula')])
     const reply = data as SaveReply
     if (reply.ok) {
+      // Photos are uploaded after the formula is saved, tagged with its revision.
+      let added = 0
+      const failed: string[] = []
+      if (newPhotos.length) {
+        setSaving(true)
+        for (const file of newPhotos) {
+          try {
+            await uploadInkPhoto(reply.id, file)
+            added++
+          } catch (err) {
+            failed.push((err as Error).message)
+          }
+        }
+        setSaving(false)
+      }
       setDirty(false)
+      setNewPhotos([])
+      const photoText = added ? ` ${added} photo${added > 1 ? 's' : ''} added.` : ''
       notify(
         'success',
         reply.unchanged
-          ? 'Nothing changed, so no new revision was made.'
-          : `Formula ${formulaLabel(reply.record_no)} saved (revision ${reply.revision}).`,
+          ? added
+            ? `Formula unchanged (revision ${reply.revision}).${photoText}`
+            : 'Nothing changed, so no new revision was made.'
+          : `Formula ${formulaLabel(reply.record_no)} saved (revision ${reply.revision}).${photoText}`,
       )
+      if (failed.length) {
+        notify('error', `${failed.length} photo${failed.length > 1 ? 's were' : ' was'} not uploaded: ${failed[0]} Open the formula and add ${failed.length > 1 ? 'them' : 'it'} again.`)
+      }
       navigate(`/ink/summary/${reply.id}`)
       return
     }
@@ -404,6 +445,28 @@ function InkEditor({ recordId, startOrder }: { recordId: string | null; startOrd
             </div>
           )}
 
+          {(editable ? rows.length > 0 : photos.length > 0) && (
+            <div className="ink-photos">
+              <h3>Job sample photos</h3>
+              <p className="muted small">
+                {editable
+                  ? 'Take a photo of the printed sample (or choose one from the phone) for future reference. New photos are uploaded when you save.'
+                  : 'Photos of the printed sample.'}
+              </p>
+              {photos.length > 0 && (
+                <PhotoGallery photos={photos} onRemove={editable && record && can('ink_formula', 'edit') ? setRemoving : undefined} />
+              )}
+              <PhotoPicker
+                files={newPhotos}
+                disabled={!editable || saving}
+                onChange={(files) => {
+                  setNewPhotos(files)
+                  setDirty(true)
+                }}
+              />
+            </div>
+          )}
+
           {record && editable && (
             <label className="field">
               <span>What changed (saved with this revision)</span>
@@ -437,14 +500,38 @@ function InkEditor({ recordId, startOrder }: { recordId: string | null; startOrd
             <div className="entry-footer">
               <span className="muted small">
                 {filled} of {rows.length} colours have a formula.
+                {newPhotos.length ? ` ${newPhotos.length} new photo${newPhotos.length > 1 ? 's' : ''} to upload.` : ''}
                 {record ? ' Saving keeps the previous version in the history.' : ''}
               </span>
               <button type="button" className="primary" onClick={save} disabled={saving || !dirty}>
-                <Save size={17} /> {saving ? 'Saving…' : 'Save Formula'}
+                <Save size={17} /> {saving ? (newPhotos.length ? 'Saving and uploading photos…' : 'Saving…') : 'Save Formula'}
               </button>
             </div>
           )}
         </section>
+      )}
+
+      {removing && (
+        <ConfirmDialog
+          title="Remove this photo?"
+          message={`The photo added with revision ${removing.revision} on ${formatMoment(removing.uploaded_at)} will be deleted for everyone.`}
+          confirmLabel="Remove photo"
+          danger
+          busy={removeBusy}
+          onCancel={() => setRemoving(null)}
+          onConfirm={async () => {
+            setRemoveBusy(true)
+            try {
+              await removeInkPhoto(removing.id)
+              setPhotos((list) => list.filter((p) => p.id !== removing.id))
+              notify('success', 'Photo removed.')
+            } catch (err) {
+              notify('error', (err as Error).message)
+            }
+            setRemoveBusy(false)
+            setRemoving(null)
+          }}
+        />
       )}
     </>
   )

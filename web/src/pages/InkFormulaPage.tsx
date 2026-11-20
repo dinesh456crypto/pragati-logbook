@@ -10,6 +10,9 @@ import { downloadPdf } from '../lib/exports'
 import { RECORD_COLUMNS, formulaLabel, sideText } from '../lib/ink'
 import type { InkColour, InkRecord, InkRevision } from '../lib/ink'
 import { useToast } from '../components/Toast'
+import { PhotoGallery } from '../components/InkPhotos'
+import { loadInkPhotos } from '../lib/inkPhotos'
+import type { InkPhoto } from '../lib/inkPhotos'
 
 // Formula detail: job details, the formula sheet, and the revision history.
 export function InkFormulaPage() {
@@ -23,6 +26,8 @@ export function InkFormulaPage() {
   const [revisions, setRevisions] = useState<InkRevision[]>([])
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)
+  const [photos, setPhotos] = useState<InkPhoto[]>([])
+  const [photoError, setPhotoError] = useState('')
 
   useEffect(() => {
     let alive = true
@@ -42,6 +47,9 @@ export function InkFormulaPage() {
       setColours((c.data ?? []) as InkColour[])
       setRevisions((h.data ?? []) as InkRevision[])
     })
+    loadInkPhotos(id)
+      .then((list) => alive && setPhotos(list))
+      .catch((err: Error) => alive && setPhotoError(`Could not load the photos: ${err.message}`))
     return () => {
       alive = false
     }
@@ -148,6 +156,19 @@ export function InkFormulaPage() {
             </tbody>
           </table>
         </div>
+      </section>
+
+      <section className="card">
+        <h2>Job Sample Photos</h2>
+        {photoError ? (
+          <p className="notice error">{photoError}</p>
+        ) : photos.length === 0 ? (
+          <p className="muted">
+            No photos yet.{can('ink_formula', 'edit') && !record.archived ? ' Use Edit Formula to add a photo of the job sample.' : ''}
+          </p>
+        ) : (
+          <PhotoGallery photos={photos} />
+        )}
       </section>
 
       <section className="card no-print" id="history">

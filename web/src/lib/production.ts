@@ -384,8 +384,9 @@ export function shiftReady(ready: Stamp | null, shift: string, date: string): { 
 
 // ---- Rules shown live ---------------------------------------------------------
 
-export function changeoverRequired(side: string, continuing: boolean, isFirst: boolean): boolean {
-  return side === 'B/B F' || side === 'B/B B' ? isFirst : !continuing
+// Every side (B/B F and B/B B included) needs the changeover unless the job is continuing.
+export function changeoverRequired(continuing: boolean): boolean {
+  return !continuing
 }
 
 export const sideFamily = (side: string) =>
